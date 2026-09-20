@@ -37,7 +37,7 @@ struct SettingsInfoButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel("More information")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            Text(text)
+            Text(L10n.ui(text))
                 .font(.system(size: 12))
                 .foregroundStyle(SettingsMetrics.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -83,7 +83,7 @@ struct SettingsRowContent<Trailing: View>: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(title)
+                    Text(L10n.ui(title))
                         .font(SettingsMetrics.rowFont)
                         .foregroundStyle(SettingsMetrics.textPrimary)
                     if let info {
@@ -91,7 +91,7 @@ struct SettingsRowContent<Trailing: View>: View {
                     }
                 }
                 if let subtitle {
-                    Text(subtitle)
+                    Text(L10n.ui(subtitle))
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsMetrics.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -123,7 +123,7 @@ struct SettingsMenuPickerPill<MenuContent: View>: View {
             menuContent()
         } label: {
             HStack(spacing: 6) {
-                Text(label)
+                Text(L10n.ui(label))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundStyle(SettingsMetrics.textPrimary)
@@ -210,11 +210,11 @@ struct SettingsSlider: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(L10n.ui(title))
                         .font(SettingsMetrics.rowFont)
                         .foregroundStyle(SettingsMetrics.textPrimary)
                     if let subtitle {
-                        Text(subtitle)
+                        Text(L10n.ui(subtitle))
                             .font(.system(size: 11))
                             .foregroundStyle(SettingsMetrics.textSecondary)
                     }
@@ -287,7 +287,7 @@ private struct SettingsActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
+            Text(L10n.ui(title))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
@@ -315,11 +315,11 @@ struct SettingsSteppedSliderRowContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(title)
+                Text(L10n.ui(title))
                     .font(SettingsMetrics.rowFont)
                     .foregroundStyle(SettingsMetrics.textPrimary)
                 Spacer(minLength: 8)
-                Text(valueLabel)
+                Text(L10n.ui(valueLabel))
                     .font(SettingsMetrics.rowFont)
                     .foregroundStyle(SettingsMetrics.textSecondary)
             }
@@ -349,7 +349,7 @@ struct SettingsOptionSliderRowContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(L10n.ui(title))
                 .font(SettingsMetrics.rowFont)
                 .foregroundStyle(SettingsMetrics.textPrimary)
             // Tighter than the title-to-slider gap above, so the labels
@@ -361,7 +361,7 @@ struct SettingsOptionSliderRowContent: View {
                     .tint(GlanceTheme.accent)
                 HStack {
                     ForEach(Array(stepLabels.enumerated()), id: \.offset) { position, label in
-                        Text(label)
+                        Text(L10n.ui(label))
                             .font(.system(size: 13))
                             .foregroundStyle(SettingsMetrics.textTertiary)
                             .frame(maxWidth: .infinity, alignment: alignment(at: position))
@@ -392,7 +392,7 @@ struct HoldToConfirmButton: View {
     @State private var fillProgress: CGFloat = 0
 
     var body: some View {
-        Text(title)
+        Text(L10n.ui(title))
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(SettingsMetrics.textPrimary)
             .padding(.horizontal, 14)
@@ -436,7 +436,7 @@ struct SettingsPrimaryButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
+            Text(L10n.ui(title))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, compact ? 14 : 16)
@@ -467,7 +467,7 @@ struct SettingsEmptyStateView: View {
                 .font(.system(size: SettingsMetrics.emptyStateIconSize, weight: .regular))
                 .foregroundStyle(SettingsMetrics.textTertiary)
 
-            Text(message)
+            Text(L10n.ui(message))
                 .font(SettingsMetrics.rowFont)
                 .foregroundStyle(SettingsMetrics.textSecondary)
 
@@ -488,7 +488,7 @@ struct SettingsCaption: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(L10n.ui(text))
             .font(.system(size: 12))
             .foregroundStyle(SettingsMetrics.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -500,7 +500,7 @@ struct SettingsSectionTitle: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(L10n.ui(text))
             .font(SettingsMetrics.sectionTitleFont)
             .foregroundStyle(SettingsMetrics.textTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -555,11 +555,11 @@ struct SettingsLabeledOptionRow<Content: View>: View {
         // where a single-line `SettingsRowContent`'s title sits.
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(L10n.ui(title))
                     .font(SettingsMetrics.rowFont)
                     .foregroundStyle(SettingsMetrics.textPrimary)
                 if let subtitle {
-                    Text(subtitle)
+                    Text(L10n.ui(subtitle))
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsMetrics.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -670,7 +670,7 @@ struct SettingsOptionTile<Preview: View>: View {
                         }
                     }
 
-                Text(title)
+                Text(L10n.ui(title))
                     .font(SettingsMetrics.optionLabelFont)
                     .foregroundStyle(isSelected ? SettingsMetrics.textPrimary : SettingsMetrics.textSecondary)
             }
@@ -750,6 +750,13 @@ struct UnlockAnimationPicker: View {
             .background(Color.black, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
             .frame(width: 50, height: 50)
             .padding(.vertical, 10)
+        case .shaderOrb:
+            Image(systemName: "globe")
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(.cyan)
+                .frame(width: 50, height: 50)
+                .background(Color.black, in: RoundedRectangle(cornerRadius: 17))
+                .padding(.vertical, 10)
         case .none:
             EmptyView()
         }

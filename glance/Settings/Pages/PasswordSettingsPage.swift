@@ -75,6 +75,7 @@ struct PasswordSettingsPage: View {
     // MARK: - Locked
 
     private var lockedState: some View {
+        VStack(spacing: 12) {
         SettingsEmptyStateView(
             icon: "lock.fill",
             message: "Session locked",
@@ -83,6 +84,11 @@ struct PasswordSettingsPage: View {
             caption: sessionError,
             action: unlock
         )
+            if pocController.requiresStorageRecovery {
+                Button(L10n.ui("Recover secure setup…")) { OnboardingController.startEnrollmentOnly() }
+                    .buttonStyle(.bordered)
+            }
+        }
     }
 
     // MARK: - Unlocked
@@ -149,7 +155,7 @@ struct PasswordSettingsPage: View {
     /// face store requires an unlocked session.
     private func removePassword() {
         do {
-            FaceEnrollmentStore.shared.deleteAll()
+            try FaceEnrollmentStore.shared.deleteAll()
             try SecureCredentialManager.deletePassword()
             pocController.refreshCredentialStatus()
             statusMessage = "Password and face enrollment removed."

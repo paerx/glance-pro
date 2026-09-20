@@ -84,7 +84,13 @@ struct NotchOverlayView: View {
     }
 
     private var scanOpenSize: CGSize {
-        style == .notch ? NotchGeometry.notchOpenSize : NotchGeometry.pillOpenSize
+        if controller.activeUnlockStyle == .shaderOrb {
+            let screen = NotchGeometry.preferredScreen()?.frame.size ?? CGSize(width: 1280, height: 800)
+            let side = min(CGFloat(GlanceSettings.shared.shaderOrbConfiguration.clampedSize),
+                           max(120, min(screen.width - 120, screen.height - 140)))
+            return CGSize(width: max(closedBodySize.width, side + 32), height: side + 48)
+        }
+        return style == .notch ? NotchGeometry.notchOpenSize : NotchGeometry.pillOpenSize
     }
 
     /// In notch style the width grows to add flanking black beside the physical cutout;
@@ -203,7 +209,7 @@ struct NotchOverlayView: View {
     /// Success and failure both leave `.scanning`, ending the pulse so the resolve
     /// animation plays against steady content.
     private var isScanning: Bool {
-        controller.phase == .scanning
+        controller.phase == .scanning && controller.activeUnlockStyle != .shaderOrb
     }
 
     private var scanPulseScale: CGFloat {
@@ -218,7 +224,18 @@ struct NotchOverlayView: View {
     /// whole panel — hence passing it into `MinimalUnlockView` rather than wrapping `Group`.
     @ViewBuilder
     private var scanContent: some View {
-        if isMinimalScan {
+        if controller.activeUnlockStyle == .shaderOrb {
+            if controller.phase != .closed {
+                ShaderOrbView(
+                    configuration: GlanceSettings.shared.shaderOrbConfiguration,
+                    state: controller.media == .success ? .speaking : (controller.media == .failure ? .idle : .thinking),
+                    fallbackMedia: controller.media
+                )
+                .frame(width: scanOpenSize.height - 48, height: scanOpenSize.height - 48)
+                .padding(.top, 32)
+                .padding(.bottom, 16)
+            }
+        } else if isMinimalScan {
             MinimalUnlockView(
                 media: controller.media,
                 isUnlocked: isMinimalLockOpen,

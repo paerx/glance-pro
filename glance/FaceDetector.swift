@@ -33,13 +33,23 @@ struct DetectedFace {
 /// background task despite the project's default main-actor isolation.
 nonisolated enum FaceDetector {
     /// Runs face-rectangle, capture-quality, and landmarks detection on a single frame.
-    static func detectFaces(in image: CGImage) throws -> [DetectedFace] {
+    static func detectFaces(in image: CGImage, includeCaptureDetails: Bool = true) throws -> [DetectedFace] {
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
 
         let rectanglesRequest = VNDetectFaceRectanglesRequest()
         try handler.perform([rectanglesRequest])
         let faceObservations = rectanglesRequest.results ?? []
         guard !faceObservations.isEmpty else { return [] }
+
+        if !includeCaptureDetails {
+            let size = CGSize(width: image.width, height: image.height)
+            return faceObservations.map {
+                DetectedFace(boundingBox: convertToImageSpace($0.boundingBox, imageSize: size),
+                             normalizedBoundingBox: $0.boundingBox, quality: nil,
+                             yaw: $0.yaw?.floatValue, roll: $0.roll?.floatValue, pitch: $0.pitch?.floatValue,
+                             landmarks: nil, imageSize: size)
+            }
+        }
 
         // Chained to the rectangles results (via `inputFaceObservations`) rather than run independently, so results
         // correspond 1:1 in order — avoids the fragility of matching back via boundingBox float equality.

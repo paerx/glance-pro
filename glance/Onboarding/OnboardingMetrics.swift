@@ -189,13 +189,10 @@ enum OnboardingMetrics {
 
     // MARK: - Enrollment camera-complete sequence timings (seconds)
 
-    static let guideOverlayFadeOut: Double = 0.35
     static let previewFadeOut: Double = 0.4
-    static let checkmarkDelay: Double = 0.2
     static let checkmarkDrawDuration: Double = 0.28
-    /// How long the checkmark holds after the nine poses before the panel
-    /// moves on to the naming step.
-    static let cameraCompleteToNameDelay: Double = 3.0
+    /// Brief confirmation after asynchronous sample preparation, then naming.
+    static let cameraCompleteToNameDelay: Double = 0.65
     static let completeScreenDismissDelay: Double = 3.0
 
     // MARK: - In-panel enrollment chrome

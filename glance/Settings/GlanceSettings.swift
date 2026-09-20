@@ -38,6 +38,7 @@ enum UnlockAnimationStyle: String, CaseIterable, Identifiable {
     case none
     case minimal
     case original
+    case shaderOrb
 
     var id: String { rawValue }
 
@@ -46,11 +47,12 @@ enum UnlockAnimationStyle: String, CaseIterable, Identifiable {
         case .none: return "None"
         case .minimal: return "Minimal"
         case .original: return "Original"
+        case .shaderOrb: return "Shader Orbs"
         }
     }
 
     /// The styles the picker offers; `.none` is still a valid stored value but is now produced by the "Show animation" toggle, not a tile.
-    static let selectableCases: [UnlockAnimationStyle] = [.minimal, .original]
+    static let selectableCases: [UnlockAnimationStyle] = [.minimal, .original, .shaderOrb]
 }
 
 /// What can prompt Face Unlock. Multi-select; at least one is always kept
@@ -87,6 +89,10 @@ enum UnlockTrigger: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class GlanceSettings {
+    var language: AppLanguage = .initial {
+        didSet { UserDefaults.standard.set(language.rawValue, forKey: "Glance.language") }
+    }
+
     static let shared = GlanceSettings()
 
     private enum Key {
@@ -117,6 +123,14 @@ final class GlanceSettings {
 
     @ObservationIgnored private let defaults = UserDefaults.standard
 
+    var shaderOrbConfiguration: ShaderOrbConfiguration {
+        didSet {
+            if let data = try? JSONEncoder().encode(shaderOrbConfiguration) {
+                defaults.set(data, forKey: "GlanceSettings.shaderOrbConfiguration")
+            }
+        }
+    }
+
     var isFaceUnlockEnabled: Bool {
         didSet { defaults.set(isFaceUnlockEnabled, forKey: Key.isFaceUnlockEnabled) }
     }
@@ -141,7 +155,7 @@ final class GlanceSettings {
             FaceRecognitionPipeline.minimumProminentFaceWidth = minimumFaceWidth
         }
     }
-    /// The remembered choice (`.minimal`/`.original` only); `showUnlockAnimation`
+    /// The remembered style; `showUnlockAnimation`
     /// tracks on/off separately so toggling back on restores the prior pick.
     /// Read `effectiveUnlockAnimationStyle`, not this, to decide what to show.
     var unlockAnimationStyle: UnlockAnimationStyle {
@@ -253,6 +267,9 @@ final class GlanceSettings {
     }
 
     private init() {
+        shaderOrbConfiguration = defaults.data(forKey: "GlanceSettings.shaderOrbConfiguration")
+            .flatMap { try? JSONDecoder().decode(ShaderOrbConfiguration.self, from: $0) }
+            ?? ShaderOrbConfiguration()
         // Enabled by default — onboarding already enrolled a face and set a
         // password specifically to use Face Unlock.
         isFaceUnlockEnabled = defaults.object(forKey: Key.isFaceUnlockEnabled) as? Bool ?? true

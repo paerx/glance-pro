@@ -35,11 +35,11 @@ struct AboutSettingsPage: View {
                 .contentShape(Rectangle())
                 .onTapGesture(perform: handleIconTap)
 
-            Text("Glance")
+            Text(L10n.ui("Glance"))
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(SettingsMetrics.textPrimary)
 
-            Text(versionString)
+            Text(L10n.ui(versionString))
                 .font(.system(size: 12))
                 .foregroundStyle(SettingsMetrics.textSecondary)
         }

@@ -14,6 +14,7 @@ struct YourFaceSettingsPage: View {
     @Bindable private var store = FaceEnrollmentStore.shared
 
     @State private var sessionError: String?
+    @State private var requiresStorageRecovery = false
     @State private var isUnlocking = false
     @State private var identityPendingDeletion: FaceIdentity?
     /// Surfaced when an encrypted write fails (realistically: the session
@@ -84,16 +85,17 @@ struct YourFaceSettingsPage: View {
             titleVisibility: .visible,
             presenting: identityPendingDeletion
         ) { identity in
-            Button("Delete", role: .destructive) { delete(identity) }
-            Button("Cancel", role: .cancel) { identityPendingDeletion = nil }
+            Button(L10n.ui("Delete"), role: .destructive) { delete(identity) }
+            Button(L10n.ui("Cancel"), role: .cancel) { identityPendingDeletion = nil }
         } message: { identity in
-            Text("\"\(identity.name)\" will stop being recognized until you enroll them again.")
+            Text(L10n.ui("\"\(identity.name)\" will stop being recognized until you enroll them again."))
         }
     }
 
     // MARK: - Locked
 
     private var lockedState: some View {
+        VStack(spacing: 12) {
         SettingsEmptyStateView(
             icon: "lock.fill",
             message: "Session locked",
@@ -102,6 +104,11 @@ struct YourFaceSettingsPage: View {
             caption: sessionError,
             action: unlock
         )
+            if requiresStorageRecovery {
+                Button(L10n.ui("Recover secure setup…")) { OnboardingController.startEnrollmentOnly() }
+                    .buttonStyle(.bordered)
+            }
+        }
     }
 
     // MARK: - Unreadable
@@ -115,7 +122,7 @@ struct YourFaceSettingsPage: View {
                 .font(.system(size: SettingsMetrics.emptyStateIconSize, weight: .regular))
                 .foregroundStyle(SettingsMetrics.qualityFairColor)
 
-            Text("Enrolled faces couldn't be read")
+            Text(L10n.ui("Enrolled faces couldn't be read"))
                 .font(SettingsMetrics.rowFont)
                 .foregroundStyle(SettingsMetrics.textSecondary)
 
@@ -175,7 +182,7 @@ struct YourFaceSettingsPage: View {
         SettingsGroup {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Face encrypted")
+                    Text(L10n.ui("Face encrypted"))
                         .font(SettingsMetrics.rowFont)
                         .foregroundStyle(SettingsMetrics.textPrimary)
                     Spacer(minLength: 8)
@@ -184,7 +191,7 @@ struct YourFaceSettingsPage: View {
                         .foregroundStyle(SettingsMetrics.textSecondary)
                 }
 
-                Text("Enroll separate identities to use Glance with multiple people, accessories (ex. glasses), facial expressions, or new lighting environments. This improves recognition quality.")
+                Text(L10n.ui("Enroll separate identities to use Glance with multiple people, accessories (ex. glasses), facial expressions, or new lighting environments. This improves recognition quality."))
                     .font(.system(size: 12))
                     .foregroundStyle(SettingsMetrics.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -248,6 +255,7 @@ struct YourFaceSettingsPage: View {
     private func unlock() {
         isUnlocking = true
         sessionError = nil
+        requiresStorageRecovery = false
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -255,6 +263,7 @@ struct YourFaceSettingsPage: View {
                 }.value
                 store.reloadIfUnlocked()
             } catch {
+                requiresStorageRecovery = (error as? SecureCredentialError) == .sessionKeyUnavailable
                 sessionError = error.localizedDescription
             }
             isUnlocking = false
@@ -310,7 +319,7 @@ private struct IdentityCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(qualityCaption)
+                    Text(L10n.ui(qualityCaption))
                         .font(.system(size: 12))
                         .foregroundStyle(SettingsMetrics.textTertiary)
 
@@ -330,7 +339,7 @@ private struct IdentityCard: View {
                 .opacity(isEnabled ? 1 : 0.45)
 
                 if isStale {
-                    Text("Captured with a different recognition model — recapture before this face can unlock your Mac.")
+                    Text(L10n.ui("Captured with a different recognition model — recapture before this face can unlock your Mac."))
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsMetrics.qualityFairColor)
                         .fixedSize(horizontal: false, vertical: true)
@@ -408,7 +417,7 @@ private struct PillActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
+            Text(L10n.ui(title))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(SettingsMetrics.textPrimary)
                 .padding(.horizontal, 14)

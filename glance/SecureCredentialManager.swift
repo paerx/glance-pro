@@ -11,12 +11,13 @@ import Foundation
 import CryptoKit
 import LocalAuthentication
 
-enum SecureCredentialError: LocalizedError {
+enum SecureCredentialError: LocalizedError, Equatable {
     case emptyPassword
     case sessionLocked
     case encryptionFailed
     case decryptionFailed
     case sessionKeyUnavailable
+    case encryptedFacesRemain
 
     var errorDescription: String? {
         switch self {
@@ -29,7 +30,9 @@ enum SecureCredentialError: LocalizedError {
         case .decryptionFailed:
             return "Decryption failed. The stored credential may be corrupted."
         case .sessionKeyUnavailable:
-            return "The session key is missing, but encrypted data still exists that only it could read. Nothing has been deleted. Remove the stored password on the Password tab to clear both and start fresh."
+            return "Previous encrypted data has no accessible key. Keep it and start a new secure setup, or reopen the original signed app to access it."
+        case .encryptedFacesRemain:
+            return "Face data could not be removed. The session key has been kept so your data stays readable."
         }
     }
 }
@@ -38,12 +41,13 @@ extension Notification.Name {
     /// Fires whenever the cached session key changes, so anything encrypted under it (e.g. `FaceEnrollmentStore`) can reload
     /// itself instead of relying on each call site to remember to — a past bug had the sidebar's unlock forget this, leaving
     /// face unlock silently running on stale pre-unlock data.
-    static let secureCredentialSessionDidChange = Notification.Name("SecureCredentialManager.sessionDidChange")
+    nonisolated static let secureCredentialSessionDidChange = Notification.Name("SecureCredentialManager.sessionDidChange")
 }
 
 enum SecureCredentialManager {
-    nonisolated private static let sessionKeyAccount = "sessionKey"
-    nonisolated private static let passwordBlobAccount = "encryptedPassword"
+    nonisolated private static var sessionKeyAccount: String { CredentialVault.account("sessionKey") }
+    nonisolated private static var passwordBlobAccount: String { CredentialVault.account("encryptedPassword") }
+    nonisolated private static let unlockLock = NSLock()
 
     // MARK: - Session state (thread-safe via NSLock)
 
@@ -122,28 +126,30 @@ enum SecureCredentialManager {
     /// `LAContext.evaluatePolicy` synchronously via a semaphore deadlocks the thread pool and crashes the process.
     /// Must succeed before `savePassword`/`readPassword`. Blocking; call from a background task.
     nonisolated static func unlockSession(reason: String) throws {
+        unlockLock.lock(); defer { unlockLock.unlock() }
         if cachedKey() != nil { return }
 
         // The existence check, not the read, decides whether a key gets created (load-bearing): a cancelled Touch ID prompt on
         // a user-presence item reports `errSecItemNotFound`, indistinguishable from no key — deciding on the read's error would
         // mint a fresh key (destroying the one that decrypts existing data) on every mis-tap.
-        if KeychainManager.exists(account: sessionKeyAccount) {
+        if try KeychainManager.contains(account: sessionKeyAccount) {
             let context = LAContext()
             context.localizedReason = reason
             let data = try KeychainManager.read(account: sessionKeyAccount, context: context)
+            guard data.count == 32 else { throw KeychainError.unexpectedData }
             setCachedKey(SymmetricKey(data: data))
             return
         }
 
         // No key at all, but minting one is still destructive if data is already encrypted under a previous key (e.g. a
         // re-signed dev build) — refuse rather than silently render it unreadable forever.
-        guard !hasSessionEncryptedData else {
+        guard try !KeychainManager.contains(account: passwordBlobAccount), !SecureFaceStore.exists else {
             throw SecureCredentialError.sessionKeyUnavailable
         }
 
         let key = SymmetricKey(size: .bits256)
         let access = try KeychainManager.makeUserPresenceAccessControl()
-        try KeychainManager.save(
+        try KeychainManager.create(
             account: sessionKeyAccount,
             data: key.withUnsafeBytes { Data($0) },
             accessControl: access
@@ -153,6 +159,28 @@ enum SecureCredentialManager {
         let readBackContext = LAContext()
         readBackContext.localizedReason = reason
         let data = try KeychainManager.read(account: sessionKeyAccount, context: readBackContext)
+        guard data.count == 32 else { throw KeychainError.unexpectedData }
+        setCachedKey(SymmetricKey(data: data))
+    }
+
+    /// Called only by the explicit recovery confirmation in setup. Authentication
+    /// cancellation leaves the selected vault and all existing data untouched.
+    nonisolated static func startNewVaultPreservingPreviousData() throws {
+        unlockLock.lock(); defer { unlockLock.unlock() }
+        guard cachedKey() == nil else { return }
+        guard try !KeychainManager.contains(account: sessionKeyAccount) else {
+            throw SecureCredentialError.sessionLocked
+        }
+        let identifier = UUID().uuidString
+        let account = CredentialVault.account("sessionKey", vault: identifier)
+        let key = SymmetricKey(size: .bits256)
+        try KeychainManager.create(account: account, data: key.withUnsafeBytes { Data($0) },
+                                   accessControl: KeychainManager.makeUserPresenceAccessControl())
+        let context = LAContext()
+        context.localizedReason = "Start a new Glance setup while keeping previous encrypted data"
+        let data = try KeychainManager.read(account: account, context: context)
+        guard data.count == 32 else { throw KeychainError.unexpectedData }
+        try CredentialVault.activate(identifier)
         setCachedKey(SymmetricKey(data: data))
     }
 
@@ -187,6 +215,7 @@ enum SecureCredentialManager {
 
     /// Deletes both Keychain items and clears the cached session key.
     nonisolated static func deletePassword() throws {
+        guard !SecureFaceStore.exists else { throw SecureCredentialError.encryptedFacesRemain }
         try KeychainManager.delete(account: passwordBlobAccount)
         try KeychainManager.delete(account: sessionKeyAccount)
         setCachedKey(nil)

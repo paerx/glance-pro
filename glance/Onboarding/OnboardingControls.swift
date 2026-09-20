@@ -25,7 +25,7 @@ struct PillButton: View {
 
     var body: some View {
         let button = Button(action: action) {
-            Text(title)
+            Text(L10n.ui(title))
                 .font(GlanceTheme.Font.button)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .frame(width: width, height: OnboardingMetrics.pillButtonHeight)
@@ -63,10 +63,10 @@ struct PermissionRow: View {
                 .frame(width: OnboardingMetrics.statusDotSize, height: OnboardingMetrics.statusDotSize)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
+                Text(L10n.ui(title))
                     .font(GlanceTheme.Font.rowTitle)
                     .foregroundStyle(GlanceTheme.textPrimary)
-                Text(detail)
+                Text(L10n.ui(detail))
                     .font(GlanceTheme.Font.rowDetail)
                     .foregroundStyle(GlanceTheme.textDetail)
                     .lineLimit(1)
@@ -76,7 +76,7 @@ struct PermissionRow: View {
             Spacer(minLength: 4)
 
             Button(action: grant) {
-                Text(granted ? "Granted" : "Grant")
+                Text(L10n.ui(granted ? "Granted" : "Grant"))
                     .font(GlanceTheme.Font.grantLabel)
                     .foregroundStyle(GlanceTheme.textPrimary)
                     .frame(width: OnboardingMetrics.grantButtonSize.width, height: OnboardingMetrics.grantButtonSize.height)
@@ -114,7 +114,7 @@ struct CameraSelectionPill: View {
                     Button(device.name) { onSelect(device.id) }
                 }
             } label: {
-                Text(label)
+                Text(L10n.ui(label))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundStyle(GlanceTheme.textPrimary)
@@ -154,7 +154,7 @@ struct PillSecureField: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(GlanceTheme.placeholder))
+        SecureField("", text: $text, prompt: Text(L10n.ui(placeholder)).foregroundStyle(GlanceTheme.placeholder))
             .textFieldStyle(.plain)
             .font(GlanceTheme.Font.passwordPlaceholder)
             .foregroundStyle(GlanceTheme.textPrimary)
@@ -179,7 +179,7 @@ struct PillTextField: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(GlanceTheme.placeholder))
+        TextField("", text: $text, prompt: Text(L10n.ui(placeholder)).foregroundStyle(GlanceTheme.placeholder))
             .textFieldStyle(.plain)
             .font(GlanceTheme.Font.passwordPlaceholder)
             .foregroundStyle(GlanceTheme.textPrimary)

@@ -17,11 +17,22 @@ final class POCController {
     var hasStoredPassword: Bool = SecureCredentialManager.hasStoredPassword()
     var isSessionUnlocked: Bool = SecureCredentialManager.isSessionUnlocked
     var sessionError: String? = nil
+    var requiresStorageRecovery = false
 
     /// Bound to the setup SecureField. Cleared immediately after a successful save.
     var passwordInput: String = ""
 
     var statusMessage: String = "Idle"
+
+    private var sessionObserver: NSObjectProtocol?
+
+    init() {
+        sessionObserver = NotificationCenter.default.addObserver(
+            forName: .secureCredentialSessionDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshCredentialStatus() }
+        }
+    }
 
     func refreshAccessibilityStatus() {
         accessibilityGranted = KeystrokeInjector.isAccessibilityTrusted()
@@ -34,6 +45,7 @@ final class POCController {
     func refreshCredentialStatus() {
         hasStoredPassword = SecureCredentialManager.hasStoredPassword()
         isSessionUnlocked = SecureCredentialManager.isSessionUnlocked
+        if isSessionUnlocked { sessionError = nil; requiresStorageRecovery = false }
     }
 
     // MARK: - Session (Touch ID gate)
@@ -41,13 +53,15 @@ final class POCController {
     /// Must succeed before `savePassword()` or `injectStoredPassword()` will do anything.
     func unlockSession() async {
         sessionError = nil
+        requiresStorageRecovery = false
         do {
             try await Task.detached(priority: .userInitiated) {
                 try SecureCredentialManager.unlockSession(reason: "Authenticate to set up or use glance")
             }.value
-            isSessionUnlocked = true
+            refreshCredentialStatus()
         } catch {
             isSessionUnlocked = false
+            requiresStorageRecovery = (error as? SecureCredentialError) == .sessionKeyUnavailable
             sessionError = error.localizedDescription
         }
     }

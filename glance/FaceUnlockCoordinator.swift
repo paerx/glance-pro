@@ -45,6 +45,9 @@ final class FaceUnlockCoordinator {
     /// One-shot per lock session — an auto-retry that could itself auto-retry would loop the camera for the whole lock session.
     private var hasAutoRetriedForCurrentLock = false
     private var scanTask: Task<Void, Never>?
+    private var triggerTask: Task<Void, Never>?
+    private var armTask: Task<Void, Never>?
+    private var triggerPolicy = WakeTriggerPolicy()
     /// Bumped by every `startScanCycle()`; a cycle bails once superseded (see `runScanCycle(generation:)`).
     private var scanGeneration = 0
     /// When the last scan cycle was armed — collapses a single wake into a single arm (see `.wake` branch of `evaluateTrigger`).
@@ -81,14 +84,35 @@ final class FaceUnlockCoordinator {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.observeLockAndWakeEvents()
-                // Brief settle delay: CGSession's reported state can lag the true state right after wake.
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                self?.evaluateTrigger()
+                self?.scheduleTriggerEvaluation()
             }
         }
     }
 
-    private func evaluateTrigger() {
+    private func scheduleTriggerEvaluation() {
+        triggerTask?.cancel()
+        let event = lockMonitor.lastEvent
+        if !triggerPolicy.receive(event) {
+            hasArmedForCurrentLock = false
+            hasAutoRetriedForCurrentLock = false
+            disarmOverlay()
+            return
+        }
+        // Wake can precede CGSession and display readiness by several seconds.
+        // Coalesce bursts but retain the wake trigger if a lock event follows it.
+        triggerTask = Task { [weak self] in
+            for _ in 0..<WakeTriggerPolicy.settleAttempts {
+                do { try await Task.sleep(for: WakeTriggerPolicy.settleInterval) } catch { return }
+                guard let self, !Task.isCancelled, !self.lockMonitor.isSleeping else { return }
+                if LockMonitor.isScreenActuallyLocked(), NotchGeometry.preferredScreen() != nil {
+                    self.evaluateTrigger(event: self.triggerPolicy.consume())
+                    return
+                }
+            }
+        }
+    }
+
+    private func evaluateTrigger(event: LockEventKind?) {
         guard LockMonitor.isScreenActuallyLocked() else {
             hasArmedForCurrentLock = false
             hasAutoRetriedForCurrentLock = false
@@ -99,15 +123,16 @@ final class FaceUnlockCoordinator {
 
         // `.wake` (sleep, display sleep, or screensaver stopping) is an explicit "let me back in," so clear the one-shot guard.
         // `isWithinRecentArmBurst` keeps the several wake signals from one lid-open from each re-arming and fighting over the camera.
-        if lockMonitor.lastEvent == .wake, !isWithinRecentArmBurst {
+        if event == .wake, !isWithinRecentArmBurst {
             hasArmedForCurrentLock = false
+            hasAutoRetriedForCurrentLock = false
         }
 
         // Runs before the hasArmedForCurrentLock guard — the space monitor's lifetime is tied to "locked + opted in," not to whether a scan already ran.
         updateSpaceMonitor()
 
         guard isEnabled, !hasArmedForCurrentLock else { return }
-        guard let signal = requiredTrigger(for: lockMonitor.lastEvent) else { return }
+        guard let signal = requiredTrigger(for: event) else { return }
         // A pinned display that isn't connected bails entirely rather than showing up elsewhere; "Main display" (nil) always resolves.
         guard NotchGeometry.preferredScreen() != nil else { return }
 
@@ -129,9 +154,10 @@ final class FaceUnlockCoordinator {
 
         hasArmedForCurrentLock = true
         lastArmedAt = .now
-        Task { [weak self] in
+        armTask?.cancel()
+        armTask = Task { [weak self] in
             // arm() only shows a small closed notch silhouette, so this only needs a brief buffer past the login window's entrance.
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             await self?.arm(autoScan: shouldAutoScan)
         }
     }
@@ -152,6 +178,8 @@ final class FaceUnlockCoordinator {
     }
 
     private func disarmOverlay() {
+        armTask?.cancel()
+        armTask = nil
         scanTask?.cancel()
         scanTask = nil
         // Bumping makes any cycle still suspended at `await camera.start()` inert, rather than resuming and re-showing the overlay.
@@ -205,7 +233,8 @@ final class FaceUnlockCoordinator {
 
     /// Either way the overlay still arms — a deselected trigger only skips the automatic scan, leaving hover-to-start available.
     private func arm(autoScan: Bool) async {
-        guard LockMonitor.isScreenActuallyLocked() else { return }
+        guard !Task.isCancelled, isEnabled, !lockMonitor.isSleeping,
+              SecureCredentialManager.isSessionUnlocked, LockMonitor.isScreenActuallyLocked() else { return }
         guard showsUI else {
             // Headless: evaluateTrigger() already guaranteed autoScan is true here, so this is just "start scanning."
             startScanCycle()
@@ -234,7 +263,8 @@ final class FaceUnlockCoordinator {
     /// of itself. This was a real bug — a superseded `camera.stop()` queued behind the newer cycle's `startRunning()` made the
     /// camera visibly switch on then die mid-warm-up, leaving the surviving cycle polling a dead session and never unlocking.
     private func runScanCycle(generation: Int) async {
-        guard LockMonitor.isScreenActuallyLocked() else { return }
+        guard isEnabled, !lockMonitor.isSleeping, SecureCredentialManager.isSessionUnlocked,
+              LockMonitor.isScreenActuallyLocked() else { return }
 
         await camera.start()
         guard generation == scanGeneration else { return }
@@ -245,6 +275,17 @@ final class FaceUnlockCoordinator {
             return
         }
 
+        // Give a waking camera its own warm-up budget before timing recognition.
+        let warmupDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while camera.currentFrame == nil, ContinuousClock.now < warmupDeadline {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard generation == scanGeneration else { return }
+            guard !lockMonitor.isSleeping, LockMonitor.isScreenActuallyLocked() else {
+                disarmOverlay()
+                return
+            }
+        }
+        guard generation == scanGeneration, !Task.isCancelled else { return }
         let showsUI = self.showsUI
         if showsUI {
             NotchOverlayController.shared.beginScanning()

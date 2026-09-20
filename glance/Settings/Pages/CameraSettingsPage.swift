@@ -131,7 +131,7 @@ struct CameraSettingsPage: View {
     private func cameraPicker(title: String, selection: Binding<String?>) -> some View {
         SettingsRowContent(title: title) {
             SettingsMenuPickerPill(label: cameraLabel(for: selection.wrappedValue)) {
-                Button("System default") { selection.wrappedValue = nil }
+                Button(L10n.ui("System default")) { selection.wrappedValue = nil }
                 ForEach(devices) { device in
                     Button(device.name) { selection.wrappedValue = device.id }
                 }

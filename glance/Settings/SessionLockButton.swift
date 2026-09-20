@@ -13,6 +13,7 @@ struct SessionLockButton: View {
     @Bindable var pocController: POCController
 
     @State private var isUnlocking = false
+    @State private var showsError = false
 
     var body: some View {
         Button(action: toggleSession) {
@@ -23,7 +24,7 @@ struct SessionLockButton: View {
                     // where supported; SwiftUI falls back to a crossfade.
                     .contentTransition(.symbolEffect(.replace))
 
-                Text(label)
+                Text(L10n.ui(label))
                     .font(SettingsMetrics.headerButtonFont)
                     .contentTransition(.opacity)
             }
@@ -37,6 +38,12 @@ struct SessionLockButton: View {
             )
             .contentShape(Capsule())
         }
+        .alert(L10n.ui("Session locked"), isPresented: $showsError) {
+            if pocController.requiresStorageRecovery {
+                Button(L10n.ui("Recover secure setup…")) { OnboardingController.startEnrollmentOnly() }
+            }
+            Button(L10n.ui("Cancel"), role: .cancel) { }
+        } message: { Text(L10n.ui(pocController.sessionError ?? "Session locked")) }
         .buttonStyle(.plain)
         // Only disabled mid-authentication — a tap then would double up the
         // Touch ID prompt or race the unresolved lock.
@@ -44,10 +51,8 @@ struct SessionLockButton: View {
         .animation(SettingsMetrics.stateTransitionAnimation, value: pocController.isSessionUnlocked)
         .animation(SettingsMetrics.stateTransitionAnimation, value: isUnlocking)
         .onAppear { pocController.refreshCredentialStatus() }
-        // Some unlock paths call SecureCredentialManager directly rather
-        // than through this pocController, so this doesn't update
-        // reactively on its own — refresh after the notch closes, same as
-        // every gated page.
+        // Session changes are observed by POCController. Also refresh password
+        // existence when setup closes, since saving it does not change the key.
         .onChange(of: NotchOverlayController.shared.phase) { _, newPhase in
             guard newPhase == .closed else { return }
             pocController.refreshCredentialStatus()
@@ -68,6 +73,7 @@ struct SessionLockButton: View {
         Task {
             await pocController.unlockSession()
             isUnlocking = false
+            showsError = pocController.sessionError != nil
         }
     }
 }

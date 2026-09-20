@@ -1,0 +1,14 @@
+{
+  "name": "glance-shadercn-import",
+  "private": true,
+  "type": "module",
+  "scripts": { "generate": "node generate.mjs" },
+  "dependencies": {
+    "@babel/core": "8.0.1",
+    "@babel/preset-typescript": "8.0.1",
+    "esbuild": "0.25.12",
+    "naga-wasm": "30.1.0",
+    "typegpu": "0.12.5",
+    "unplugin-typegpu": "0.12.3"
+  }
+}

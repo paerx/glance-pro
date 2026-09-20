@@ -31,6 +31,14 @@ struct GeneralSettingsPage: View {
 
     var body: some View {
         SettingsGroup {
+            SettingsRowContent(title: "Language") {
+                SettingsMenuPickerPill(label: settings.language.title) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Button(language.title) { settings.language = language }
+                    }
+                }
+            }
+            SettingsGroupDivider()
             SettingsRowContent(title: "Launch at login") {
                 GlanceToggle(isOn: Binding(
                     get: { launchAtLoginEnabled },
@@ -121,6 +129,9 @@ struct GeneralSettingsPage: View {
                     isEnabled: settings.showUnlockAnimation
                 )
             }
+            if settings.unlockAnimationStyle == .shaderOrb {
+                ShaderOrbSettingsView()
+            }
         }
     }
 
@@ -128,7 +139,7 @@ struct GeneralSettingsPage: View {
     private func inputMonitoringNotice() -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SettingsCaption(text: "“On space” reads the keyboard directly to see the space key on the lock screen, which needs Accessibility — the same permission glance uses to type your password. Switch glance on under Privacy & Security → Accessibility, then quit and reopen glance.")
-            Button("Open Accessibility settings") {
+            Button(L10n.ui("Open Accessibility settings")) {
                 // Covers the rare install with no Accessibility grant at all.
                 SpaceKeyMonitor.requestInputMonitoringAccess()
                 openSystemSettings(pane: "Privacy_Accessibility")
@@ -150,7 +161,7 @@ struct GeneralSettingsPage: View {
     private func displayPicker() -> some View {
         SettingsRowContent(title: "Display on") {
             SettingsMenuPickerPill(label: displayLabel) {
-                Button("Main display") {
+                Button(L10n.ui("Main display")) {
                     settings.preferredDisplayID = nil
                     settings.preferredDisplayName = nil
                 }

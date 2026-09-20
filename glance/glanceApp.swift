@@ -190,12 +190,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Fires right before the menu opens — simpler than keeping an `NSMenuItem` reactively bound to `isSessionUnlocked`.
     func menuNeedsUpdate(_ menu: NSMenu) {
         updateSessionMenuItem()
+        for item in menu.items {
+            if item.action == #selector(openSettingsWindow) { item.title = L10n.ui("Settings") }
+            if item.action == #selector(NSApplication.terminate(_:)) { item.title = L10n.ui("Quit") }
+        }
     }
 
     private func updateSessionMenuItem() {
         guard let sessionMenuItem else { return }
         let isUnlocked = environment.pocController.isSessionUnlocked
-        sessionMenuItem.title = isUnlocked ? "Session Unlocked" : "Session Locked"
+        sessionMenuItem.title = L10n.ui(isUnlocked ? "Session Unlocked" : "Session Locked")
         sessionMenuItem.image = NSImage(
             systemSymbolName: isUnlocked ? "lock.open.fill" : "lock.fill",
             accessibilityDescription: nil

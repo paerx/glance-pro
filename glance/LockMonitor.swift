@@ -10,16 +10,6 @@ import AppKit
 import CoreGraphics
 import Observation
 
-/// Which signal most recently fired — `withObservationTracking`'s `onChange` doesn't say which property changed, so observers
-/// read this alongside the monotonic `eventCount` to tell events apart.
-enum LockEventKind {
-    case screenLocked
-    case screenUnlocked
-    case willSleep
-    /// Display turned back on, from system sleep, display sleep, or the screensaver stopping.
-    case wake
-}
-
 @Observable
 final class LockMonitor {
     /// NOT trustworthy alone: any same-user process can post these distributed notifications, and this process can be
@@ -82,7 +72,7 @@ final class LockMonitor {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.record(.wake)
+            self?.recordWake()
         })
 
         let workspace = NSWorkspace.shared.notificationCenter
@@ -90,6 +80,12 @@ final class LockMonitor {
             forName: NSWorkspace.willSleepNotification,
             object: nil,
             queue: .main
+        ) { [weak self] _ in
+            self?.isSleeping = true
+            self?.record(.willSleep)
+        })
+        workspaceObservers.append(workspace.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.isSleeping = true
             self?.record(.willSleep)

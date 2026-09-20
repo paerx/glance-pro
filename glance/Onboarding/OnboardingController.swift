@@ -3,7 +3,7 @@
 //  glance
 //
 //  State machine behind the notch-hosted guided onboarding flow: permissions, guided
-//  nine-pose face enrollment, and password setup. Reuses the same camera/detection/
+//  continuous face capture, background sample preparation, and password setup. Reuses the same camera/detection/
 //  embedding/storage pieces as the Face Lab debug tab rather than reimplementing them.
 //
 //  Still not milestone G: finishing onboarding stores an encrypted password and a face
@@ -51,87 +51,6 @@ enum OnboardingStep: String, CaseIterable {
         switch self {
         case .enroll, .name, .password: return .preSetup
         case .intro, .securityNotice, .permissions, .preSetup, .selectCamera, .complete: return self
-        }
-    }
-}
-
-/// A single guided head pose captured during enrollment — center plus the
-/// 8 compass directions, in the exact order presented to the user.
-enum EnrollmentPose: Int, CaseIterable {
-    case center, left, topLeft, top, topRight, right, bottomRight, bottom, bottomLeft
-
-    enum YawBand { case left, none, right }
-    enum PitchBand { case up, none, down }
-
-    var yawBand: YawBand {
-        switch self {
-        case .left, .topLeft, .bottomLeft: return .left
-        case .right, .topRight, .bottomRight: return .right
-        case .center, .top, .bottom: return .none
-        }
-    }
-
-    var pitchBand: PitchBand {
-        switch self {
-        case .top, .topLeft, .topRight: return .up
-        case .bottom, .bottomLeft, .bottomRight: return .down
-        case .center, .left, .right: return .none
-        }
-    }
-
-    /// Compass angle (0 = up, clockwise) this pose's ring sector is centered
-    /// on. `nil` for center, which pulses the whole ring instead of
-    /// claiming a sector.
-    var compassAngle: Double? {
-        switch self {
-        case .center: return nil
-        case .left: return 270
-        case .topLeft: return 315
-        case .top: return 0
-        case .topRight: return 45
-        case .right: return 90
-        case .bottomRight: return 135
-        case .bottom: return 180
-        case .bottomLeft: return 225
-        }
-    }
-
-    var instruction: String {
-        switch self {
-        case .center: return "Look straight at the camera"
-        case .left: return "Turn your head slightly left"
-        case .topLeft: return "Turn your head to the top left"
-        case .top: return "Turn your head slightly up"
-        case .topRight: return "Turn your head to the top right"
-        case .right: return "Turn your head slightly right"
-        case .bottomRight: return "Turn your head to the bottom right"
-        case .bottom: return "Turn your head slightly down"
-        case .bottomLeft: return "Turn your head to the bottom left"
-        }
-    }
-
-    /// Relaxes this pose's yaw/pitch bands — same knob as `stallWidenFactor`, so >1 is easier.
-    var matchLeniency: Float {
-        switch self {
-        case .bottomLeft, .bottomRight: return 1.5
-        case .bottom: return 1.2
-        default: return 1
-        }
-    }
-
-    /// Persisted alongside each sample so a saved identity records which
-    /// pose each embedding came from.
-    var name: String {
-        switch self {
-        case .center: return "center"
-        case .left: return "left"
-        case .topLeft: return "top_left"
-        case .top: return "top"
-        case .topRight: return "top_right"
-        case .right: return "right"
-        case .bottomRight: return "bottom_right"
-        case .bottom: return "bottom"
-        case .bottomLeft: return "bottom_left"
         }
     }
 }
@@ -291,6 +210,12 @@ final class OnboardingController {
             }.value
             return true
         } catch {
+            if (error as? SecureCredentialError) == .sessionKeyUnavailable {
+                let controller = OnboardingController(isEnrollmentOnly: true)
+                controller.storageRecoveryRequired = true
+                controller.pendingName = defaultName
+                NotchOverlayController.shared.presentOnboarding(controller)
+            }
             return false
         }
     }
@@ -331,7 +256,11 @@ final class OnboardingController {
         NotchGeometry.preferredScreen().map(NotchGeometry.forScreen)?.style ?? .notch
     }
 
-    var panelSize: CGSize { OnboardingMetrics.panelSize(for: step, style: currentPanelStyle) }
+    var panelSize: CGSize {
+        var size = OnboardingMetrics.panelSize(for: step, style: currentPanelStyle)
+        if step == .password, passwordError != nil || storageRecoveryRequired { size.height += 100 }
+        return size
+    }
     var panelBottomRadius: CGFloat { OnboardingMetrics.panelBottomRadius(for: step) }
 
     // MARK: - Permissions
@@ -344,139 +273,88 @@ final class OnboardingController {
 
     // MARK: - Enrollment
 
-    /// 9 poses x 2 samples = 18 total, enough for a stable template without overlong holds.
-    private let samplesPerPose = 2
-    /// Consecutive matching frames required before a capture fires — debounces a lucky
-    /// frame near a pose boundary.
-    private let requiredMatchStreak = 3
-    /// Wait this long after yaw/pitch matches before samples count, so the user has
-    /// settled into the turn rather than being captured mid-motion.
-    private let poseHoldDuration: Duration = .milliseconds(500)
-    /// Permissive floor for Vision's capture-quality score (no fixed universal cutoff) —
-    /// better to accept a mediocre sample than stall the whole flow.
-    private let qualityFloor: Float = 0.2
-    /// Hold off accepting captures this long once the camera comes up, so the first
-    /// samples aren't taken mid-blink. Detection still runs during this window.
-    private let initialCaptureDelay: Duration = .seconds(1.5)
-    /// Enrollment wants a closer face than unlock's bystander cutoff — sitting back in a
-    /// chair is still enough to unlock, but too far for a reliable template.
+    enum CapturePhase { case turning, processing }
+    private(set) var capturePhase: CapturePhase = .turning
+    private(set) var faceDetected = false
+    private(set) var currentYaw: Float?
+    private(set) var currentPitch: Float?
+    private(set) var isTooFar = false
+    private(set) var enrollmentComplete = false
+    private(set) var capturedPoses: Set<EnrollmentPose> = []
+    private(set) var centerPulseTick = 0
+    private(set) var guideVisible = false
+    private(set) var cameraPreviewVisible = true
+    private(set) var showCheckmark = false
+    private(set) var enrollmentBackdrop: CGImage?
+    private(set) var enrollmentError: String?
+    private(set) var captureHint: String?
+    private(set) var processingProgress = 0.0
+    private(set) var refinementHint: String?
+    private var refinementPoses = Set(EnrollmentPose.allCases)
+    private(set) var isPreparingSession = false
+    private(set) var storageRecoveryRequired = false
+    private(set) var isRecoveringStorage = false
+    private(set) var storageRecoveryError: String?
+
+    var isOrganizingSamples: Bool { capturePhase == .processing }
+    private var collectedSamples: [PreparedEnrollmentSample] = []
+    private var committedEnrollmentID: UUID?
+    private var requiresNewPassword = false
+    private var candidates: [EnrollmentPose: [EnrollmentCandidate]] = [:]
+    private var lastAcceptedAt: [EnrollmentPose: ContinuousClock.Instant] = [:]
+    private var previousFaceBox: CGRect?
+    private var lastDetectionAt: ContinuousClock.Instant?
+    private var lastFrameID: UInt64?
+    private var isProcessingFrame = false
+    private var captureGeneration = UUID()
+    private var preparationTask: Task<Void, Never>?
+    private var sampleProcessingTask: Task<Void, Never>?
+
     private var enrollmentMinimumFaceWidth: Float {
         max(FaceRecognitionPipeline.minimumProminentFaceWidth, 0.2)
     }
 
-    // Pose-matching bands, in radians. Yaw: left turn is positive, matching the mirrored
-    // preview. Pitch's sign is the opposite of the initial guess — see `pitchMatches` below.
-    private let yawInnerThreshold: Float = 0.25
-    private let yawCenterTolerance: Float = 0.18
-    private let yawOuterCap: Float = 1.2
-    private let pitchInnerThreshold: Float = 0.20
-    private let pitchCenterTolerance: Float = 0.15
-    private let pitchOuterCap: Float = 0.9
-    /// If a pose takes longer than this, matching bands widen by `stallWidenFactor` so an
-    /// unusual camera angle can't permanently strand the user.
-    private let stallTimeout: Duration = .seconds(12)
-    private let stallWidenFactor: Float = 1.25
-
-    private(set) var currentPoseIndex = 0
-    private(set) var capturedForCurrentPose = 0
-    private(set) var faceDetected = false
-    private(set) var currentYaw: Float?
-    private(set) var currentPitch: Float?
-    /// Whether the last-seen face read as too small to enroll reliably — swaps the pose
-    /// instruction for a "move closer" prompt while true.
-    private(set) var isTooFar = false
-    private(set) var enrollmentComplete = false
-
-    /// Sectors already captured — read by EnrollmentRingView to decide which
-    /// ticks are lit.
-    private(set) var capturedPoses: Set<EnrollmentPose> = []
-    /// Bumped every time `.center` is captured; EnrollmentRingView observes
-    /// this to trigger the whole-ring pulse (center has no sector of its
-    /// own to light).
-    private(set) var centerPulseTick = 0
-
-    /// Whether pose instructions should be visible in the enroll panel —
-    /// false once enrollment completes, ahead of the checkmark sequence.
-    private(set) var guideVisible = false
-    /// Whether the camera preview should be visible — faded out as part of
-    /// the camera-complete sequence.
-    private(set) var cameraPreviewVisible = true
-    /// Whether the completion checkmark should be drawing/shown.
-    private(set) var showCheckmark = false
-
-    private struct CollectedSample {
-        let embedding: [Float]
-        let pose: EnrollmentPose
-        /// Carried through so an enrolled identity can report how good its samples were.
-        let quality: Float?
-        /// Stamped at capture, not at save — samples sit in memory across the naming
-        /// (and, on first run, password) step, so a save-time stamp would be wrong.
-        let capturedAt: Date
-    }
-    /// Held in memory (not persisted) until the identity has a name; in first-run setup
-    /// saving additionally requires the session `finish(password:)` unlocks.
-    private var collectedSamples: [CollectedSample] = []
-    private var matchStreak = 0
-    private var isProcessingFrame = false
-    private var poseStartedAt: ContinuousClock.Instant = .now
-    /// Set once in `beginEnrollment()` — not per-pose — so it only holds back the first
-    /// pose rather than pausing again after every later pose change.
-    private var captureReadyAt: ContinuousClock.Instant = .now
-    /// When the current pose first started matching continuously; `nil` while out of band.
-    /// Capture waits `poseHoldDuration` past this instant.
-    private var poseHoldStartedAt: ContinuousClock.Instant?
-
     var currentPose: EnrollmentPose? {
-        EnrollmentPose(rawValue: currentPoseIndex)
+        return EnrollmentPose.allCases.first { $0 != .center && !capturedPoses.contains($0) }
     }
 
-    /// Copy shown under the camera: pose guidance, a closer-up prompt, or the
-    /// completion line.
     var enrollmentInstruction: String {
         if enrollmentComplete { return "Face captured" }
+        if isPreparingSession { return "Preparing secure storage…" }
+        if storageRecoveryRequired { return "Secure setup needs attention" }
+        if let enrollmentError { return enrollmentError }
+        if isOrganizingSamples { return refinementHint ?? "Organizing your face samples…" }
+        if let cameraError = camera.errorMessage { return cameraError }
         if isTooFar { return "Bring your face closer" }
-        return currentPose?.instruction ?? ""
+        if let captureHint { return captureHint }
+        if !faceDetected { return "Position your face inside the circle" }
+        return "Slowly move your head in a circle"
     }
 
-    /// Where the head is currently turned, for the ring's live indicator.
     struct HeadTurn: Equatable {
-        /// Compass angle (0 = up, clockwise) — same frame as `EnrollmentPose.compassAngle`.
         let angle: Double
-        /// How far the turn has gone toward the current pose's threshold, 0...1.
         let progress: Double
     }
 
-    /// Below this fraction of the threshold the direction is mostly sensor noise.
-    private let headTurnDeadzone: Double = 0.15
-
-    /// Live head direction, or `nil` when there's nothing to point at. Axes are normalized
-    /// against the current pose's thresholds, so `progress` hits 1 as the pose starts matching.
     var headTurn: HeadTurn? {
-        guard step == .enroll, !enrollmentComplete, faceDetected, !isTooFar,
-              let pose = currentPose, pose != .center,
-              let yaw = currentYaw, let pitch = currentPitch else { return nil }
-
-        // Vision inverts both axes vs. the screen: +yaw turns left, +pitch looks down.
-        let x = Double(-yaw / (yawInnerThreshold / pose.matchLeniency))
-        let y = Double(-pitch / (pitchInnerThreshold / pose.matchLeniency))
-
-        let magnitude = (x * x + y * y).squareRoot()
-        guard magnitude > headTurnDeadzone else { return nil }
-
+        guard step == .enroll, capturePhase == .turning, !enrollmentComplete,
+              faceDetected, !isTooFar, let yaw = currentYaw, let pitch = currentPitch else { return nil }
+        let x = Double(-yaw / 0.25), y = Double(-pitch / 0.20)
+        let magnitude = hypot(x, y)
+        guard magnitude > 0.15 else { return nil }
         let degrees = atan2(x, y) * 180 / .pi
         return HeadTurn(angle: degrees < 0 ? degrees + 360 : degrees, progress: min(magnitude, 1))
     }
 
     private enum EnrollFrameOutcome: Sendable {
-        case noFace
-        case tooFar
-        case ready(FaceRecognitionResult)
+        case noFace, tooFar, multipleFaces
+        case found(yaw: Float?, pitch: Float?, box: CGRect)
+        case failed(String)
     }
 
     var overallEnrollmentProgress: Double {
-        let total = Double(EnrollmentPose.allCases.count * samplesPerPose)
-        let done = Double(currentPoseIndex * samplesPerPose + capturedForCurrentPose)
-        return min(done / total, 1.0)
+        if enrollmentComplete { return 1 }
+        return Double(capturedPoses.count) / 9
     }
 
     // MARK: - Naming
@@ -487,7 +365,7 @@ final class OnboardingController {
 
     /// Naming is the last input in an add/recapture flow, but only the
     /// halfway point of first-run setup, where the password still follows.
-    var nameStepPrimaryTitle: String { isEnrollmentOnly ? "Save" : "Continue" }
+    var nameStepPrimaryTitle: String { isEnrollmentOnly && !requiresNewPassword ? "Save" : "Continue" }
 
     // MARK: - Password
 
@@ -564,6 +442,7 @@ final class OnboardingController {
     /// Steps backward. The enroll close control also lands here: a retreat to pre-setup
     /// in the full setup flow, a cancel in add/recapture.
     func back() {
+        guard !isSavingPassword, !isRecoveringStorage else { return }
         navDirection = .backward
         // No earlier step to return to in the password-only flow — Back is a plain cancel.
         if isPasswordOnly {
@@ -605,37 +484,109 @@ final class OnboardingController {
     }
 
     /// Note `pendingName` deliberately survives — no reason to make the user retype it.
+    private func cancelCaptureWork() {
+        captureGeneration = UUID()
+        preparationTask?.cancel()
+        preparationTask = nil
+        sampleProcessingTask?.cancel()
+        sampleProcessingTask = nil
+        isProcessingFrame = false
+        isPreparingSession = false
+    }
+
     private func resetEnrollmentState() {
+        cancelCaptureWork()
         collectedSamples = []
+        committedEnrollmentID = nil
+        candidates = [:]
+        lastAcceptedAt = [:]
+        lastDetectionAt = nil
+        lastFrameID = nil
+        previousFaceBox = nil
+        enrollmentBackdrop = nil
+        capturePhase = .turning
+        processingProgress = 0
+        refinementHint = nil
+        refinementPoses = Set(EnrollmentPose.allCases)
         nameError = nil
-        currentPoseIndex = 0
-        capturedForCurrentPose = 0
         capturedPoses = []
-        matchStreak = 0
-        poseHoldStartedAt = nil
         isTooFar = false
+        faceDetected = false
+        currentYaw = nil
+        currentPitch = nil
         enrollmentComplete = false
         guideVisible = false
         cameraPreviewVisible = true
         showCheckmark = false
         passwordError = nil
+        enrollmentError = nil
+        captureHint = nil
     }
 
     private func beginEnrollment() {
-        guard step == .enroll else { return }
+        guard step == .enroll, !isPreparingSession, !storageRecoveryRequired else { return }
         guideVisible = true
         cameraPreviewVisible = true
         showCheckmark = false
-        poseStartedAt = .now
-        captureReadyAt = .now + initialCaptureDelay
-        poseHoldStartedAt = nil
-        sweepWindow.present(for: self)
-        Task { await camera.start() }
+        enrollmentError = nil
+        isPreparingSession = true
+        let generation = captureGeneration
+        preparationTask = Task { [weak self] in
+            do {
+                // Authenticate before asking the user to spend time capturing.
+                try await Task.detached(priority: .userInitiated) {
+                    try SecureCredentialManager.unlockSession(reason: "Prepare secure face enrollment")
+                }.value
+                guard let self, !Task.isCancelled, self.captureGeneration == generation, self.step == .enroll else { return }
+                self.store.reloadIfUnlocked()
+                if let failure = self.store.loadFailure { throw NSError(domain: "Enrollment", code: 1, userInfo: [NSLocalizedDescriptionKey: failure]) }
+                guard !self.pipeline.usingFallbackEmbedder else {
+                    throw NSError(domain: "Enrollment", code: 2, userInfo: [NSLocalizedDescriptionKey: "The face model couldn't load. Rebuild Glance with its ArcFace model before enrolling."])
+                }
+                self.isPreparingSession = false
+                await self.camera.start()
+            } catch {
+                guard let self, !Task.isCancelled, self.captureGeneration == generation else { return }
+                self.isPreparingSession = false
+                self.storageRecoveryRequired = (error as? SecureCredentialError) == .sessionKeyUnavailable
+                self.enrollmentError = self.storageRecoveryRequired ? nil : error.localizedDescription
+            }
+        }
     }
 
-    /// Tears down everything onboarding spun up: camera, sweep overlay,
-    /// and permissions polling. Idempotent.
+    func retryEnrollment() {
+        guard !isPreparingSession, !isRecoveringStorage else { return }
+        resetEnrollmentState()
+        beginEnrollment()
+    }
+
+    /// Explicitly confirmed by the user in the recovery sheet. Old data is left
+    /// in its original namespace, never decrypted, overwritten or deleted.
+    func recoverStorage() async {
+        guard storageRecoveryRequired, !isRecoveringStorage else { return }
+        isRecoveringStorage = true
+        storageRecoveryError = nil
+        defer { isRecoveringStorage = false }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try SecureCredentialManager.startNewVaultPreservingPreviousData()
+            }.value
+            store.reloadIfUnlocked()
+            requiresNewPassword = true
+            committedEnrollmentID = nil
+            storageRecoveryRequired = false
+            passwordError = nil
+            enrollmentError = nil
+            if step == .enroll { beginEnrollment() }
+        } catch {
+            storageRecoveryError = error.localizedDescription
+        }
+    }
+
     func teardown() {
+        cancelCaptureWork()
+        candidates = [:]
+        enrollmentBackdrop = nil
         stopPermissionsPolling()
         camera.stop()
         sweepWindow.dismiss()
@@ -772,166 +723,164 @@ final class OnboardingController {
     }
 
     private func processEnrollFrame() async {
-        guard step == .enroll, !enrollmentComplete, !isProcessingFrame,
-              let cameraFrame = camera.currentFrame, let pose = currentPose else { return }
+        guard step == .enroll, !enrollmentComplete,
+              !isPreparingSession, !storageRecoveryRequired, enrollmentError == nil, !isProcessingFrame,
+              let frame = camera.currentFrame, frame.id != lastFrameID else { return }
+        let now = ContinuousClock.now
+        if let lastDetectionAt, now - lastDetectionAt < .milliseconds(70) { return }
+        lastDetectionAt = now
+        lastFrameID = frame.id
         isProcessingFrame = true
-        defer { isProcessingFrame = false }
-
-        let pipeline = self.pipeline
+        let generation = captureGeneration
+        defer { if captureGeneration == generation { isProcessingFrame = false } }
+        let image = frame.image
         let minimumWidth = enrollmentMinimumFaceWidth
-        let image = cameraFrame.image
         let outcome = await Task.detached(priority: .userInitiated) {
             do {
-                let faces = try FaceDetector.detectFaces(in: image)
-                guard let face = FaceRecognitionPipeline.largestFace(in: faces) else {
-                    return EnrollFrameOutcome.noFace
-                }
-                if Float(face.normalizedBoundingBox.width) < minimumWidth {
-                    return EnrollFrameOutcome.tooFar
-                }
-                return EnrollFrameOutcome.ready(try pipeline.recognize(face, in: image))
-            } catch {
-                return EnrollFrameOutcome.noFace
-            }
+                let faces = try FaceDetector.detectFaces(in: image, includeCaptureDetails: false)
+                guard !faces.isEmpty else { return EnrollFrameOutcome.noFace }
+                guard faces.count == 1, let face = faces.first else { return EnrollFrameOutcome.multipleFaces }
+                guard Float(face.normalizedBoundingBox.width) >= minimumWidth else { return EnrollFrameOutcome.tooFar }
+                return EnrollFrameOutcome.found(yaw: face.yaw, pitch: face.pitch, box: face.normalizedBoundingBox)
+            } catch { return EnrollFrameOutcome.failed("Camera analysis failed. Try again.") }
         }.value
-
+        guard captureGeneration == generation, step == .enroll, !Task.isCancelled else { return }
         switch outcome {
-        case .noFace:
-            faceDetected = false
-            currentYaw = nil
-            currentPitch = nil
-            matchStreak = 0
-            poseHoldStartedAt = nil
-            isTooFar = false
-            return
-        case .tooFar:
-            faceDetected = true
-            currentYaw = nil
-            currentPitch = nil
-            matchStreak = 0
-            poseHoldStartedAt = nil
-            isTooFar = true
-            return
-        case .ready(let result):
-            guard let yaw = result.face.yaw, let pitch = result.face.pitch else {
-                faceDetected = true
-                currentYaw = nil
-                currentPitch = nil
-                matchStreak = 0
-                poseHoldStartedAt = nil
-                isTooFar = false
+        case .noFace, .multipleFaces, .tooFar:
+            currentYaw = nil; currentPitch = nil
+            if case .tooFar = outcome { isTooFar = true; faceDetected = true }
+            else { isTooFar = false; faceDetected = false }
+            if case .multipleFaces = outcome { captureHint = "Only one person should be in view" }
+            else { captureHint = nil }
+        case .failed(let message):
+            enrollmentError = message
+        case .found(let yaw, let pitch, let box):
+            faceDetected = true; isTooFar = false
+            currentYaw = yaw; currentPitch = pitch
+            captureHint = nil
+            guard let yaw, let pitch, let pose = EnrollmentCapturePolicy.pose(yaw: yaw, pitch: pitch) else {
+                captureHint = "Keep your face visible; make a smaller circle"
                 return
             }
-            faceDetected = true
-            currentYaw = yaw
-            currentPitch = pitch
-            isTooFar = false
-            await processMatchedEnrollFrame(result, yaw: yaw, pitch: pitch, pose: pose)
-        }
-    }
-
-    private func processMatchedEnrollFrame(
-        _ result: FaceRecognitionResult,
-        yaw: Float,
-        pitch: Float,
-        pose: EnrollmentPose
-    ) async {
-
-        // Detection above still ran; only capture is held back until settled.
-        guard ContinuousClock.now >= captureReadyAt else {
-            matchStreak = 0
-            poseHoldStartedAt = nil
-            return
-        }
-
-        let qualityOK = result.quality.map { $0 >= qualityFloor } ?? true
-        // Only a 5-point alignment is reliably canonical; a 2-point/padded-crop fallback
-        // isn't accepted toward enrollment.
-        let alignmentOK = result.alignmentTier == .fivePoint
-        let widened = ContinuousClock.now - poseStartedAt > stallTimeout
-        let poseOK = poseMatches(yaw: yaw, pitch: pitch, pose: pose, widened: widened)
-        guard qualityOK, alignmentOK, !isTooFar, poseOK else {
-            matchStreak = 0
-            poseHoldStartedAt = nil
-            return
-        }
-
-        if poseHoldStartedAt == nil {
-            poseHoldStartedAt = .now
-        }
-        guard ContinuousClock.now - poseHoldStartedAt! >= poseHoldDuration else { return }
-
-        matchStreak += 1
-        guard matchStreak >= requiredMatchStreak else { return }
-        matchStreak = 0
-
-        collectedSamples.append(CollectedSample(
-            embedding: result.embedding,
-            pose: pose,
-            quality: result.quality,
-            capturedAt: Date()
-        ))
-        capturedForCurrentPose += 1
-
-        if capturedForCurrentPose >= samplesPerPose {
-            if pose == .center {
-                centerPulseTick += 1
-            } else {
-                capturedPoses.insert(pose)
+            if let previousFaceBox, !EnrollmentCapturePolicy.isContinuous(box, with: previousFaceBox) {
+                // Keep the anchor; final embeddings still verify identity continuity.
+                // Do not accept the first frame after a discontinuous face jump.
+                self.previousFaceBox = box
+                captureHint = "Stay centered and move a little more slowly"
+                return
             }
-            currentPoseIndex += 1
-            capturedForCurrentPose = 0
-            poseStartedAt = .now
-            poseHoldStartedAt = nil
-            if currentPoseIndex >= EnrollmentPose.allCases.count {
-                await finishEnrollment()
+            previousFaceBox = box
+            if isOrganizingSamples, !refinementPoses.contains(pose) { return }
+            let candidate = EnrollmentCandidate(image: image, pose: pose, capturedAt: Date(), boundingBox: box)
+            if let last = lastAcceptedAt[pose], now - last < .seconds(EnrollmentCapturePolicy.minimumInterval) { return }
+            lastAcceptedAt[pose] = now
+            var pool = candidates[pose] ?? []
+            pool.append(candidate)
+            if pool.count > EnrollmentCapturePolicy.candidatesPerDirection { pool.removeFirst() }
+            candidates[pose] = pool
+            if pool.count >= EnrollmentCapturePolicy.requiredSamples(for: pose) { capturedPoses.insert(pose) }
+            if !isOrganizingSamples, capturedPoses.filter({ $0 != .center }).count == 8 {
+                enrollmentBackdrop = image
+                organizeSamples()
+            } else if !isOrganizingSamples, capturedPoses.count >= 6, let missing = currentPose {
+                captureHint = "Almost done — " + missing.instruction.lowercased()
             }
+
         }
     }
 
-    private func poseMatches(yaw: Float, pitch: Float, pose: EnrollmentPose, widened: Bool) -> Bool {
-        let factor = (widened ? stallWidenFactor : 1.0) * pose.matchLeniency
-        return yawMatches(yaw, band: pose.yawBand, factor: factor)
-            && pitchMatches(pitch, band: pose.pitchBand, factor: factor)
-    }
-
-    private func yawMatches(_ yaw: Float, band: EnrollmentPose.YawBand, factor: Float) -> Bool {
-        switch band {
-        case .none: return abs(yaw) < yawCenterTolerance * factor
-        case .left: return yaw > yawInnerThreshold / factor && yaw < yawOuterCap
-        case .right: return yaw < -yawInnerThreshold / factor && yaw > -yawOuterCap
-        }
-    }
-
-    /// Confirmed empirically: Vision reports negative pitch for "looking up" and positive
-    /// for "looking down" — the opposite of the initial guess.
-    private func pitchMatches(_ pitch: Float, band: EnrollmentPose.PitchBand, factor: Float) -> Bool {
-        switch band {
-        case .none: return abs(pitch) < pitchCenterTolerance * factor
-        case .up: return pitch < -pitchInnerThreshold / factor && pitch > -pitchOuterCap
-        case .down: return pitch > pitchInnerThreshold / factor && pitch < pitchOuterCap
-        }
-    }
-
-    /// Runs the camera-complete sequence (instructions fade, preview fades, checkmark
-    /// draws) then auto-advances to naming. Samples stay in memory here.
-    private func finishEnrollment() async {
-        enrollmentComplete = true
+    /// Keep acquiring bounded pools of real camera frames while Vision/ArcFace
+    /// run off the main actor. A rejected frame never forces a full recapture.
+    private func organizeSamples() {
+        capturePhase = .processing
+        refinementPoses = Set(EnrollmentPose.allCases)
+        refinementHint = nil
+        processingProgress = 0
         sweepWindow.dismiss()
-        try? await Task.sleep(for: .seconds(OnboardingMetrics.guideOverlayFadeOut))
+        let generation = captureGeneration
+        let pipeline = self.pipeline
+        sampleProcessingTask = Task { [weak self] in
+            guard let self else { return }
+            let started = ContinuousClock.now
+            var result: EnrollmentProcessingResult?
+            do {
+                // Allow four seconds of supplemental acquisition before ranking.
+                // The camera keeps collecting real frames throughout this interval.
+                for tick in 1...8 {
+                    try await Task.sleep(for: .milliseconds(500))
+                    guard self.captureGeneration == generation, self.step == .enroll else { return }
+                    self.processingProgress = Double(tick) / 32
+                }
+                repeat {
+                    try Task.checkCancellation()
+                    let batch = self.candidates
+                    let progress: @Sendable (Double) async -> Void = { [weak self] value in
+                        await self?.updateProcessingProgress(0.25 + value * 0.65, generation: generation)
+                    }
+                    let worker = Task.detached(priority: .userInitiated) {
+                        try await EnrollmentSampleProcessor.process(batch, pipeline: pipeline, progress: progress)
+                    }
+                    result = try await withTaskCancellationHandler {
+                        try await worker.value
+                    } onCancel: { worker.cancel() }
+                    guard !Task.isCancelled, self.captureGeneration == generation, self.step == .enroll else { return }
+                    if let result {
+                        self.refinementPoses = result.missingPoses
+                        for pose in EnrollmentPose.allCases where !result.missingPoses.contains(pose) {
+                            self.candidates[pose] = batch[pose]
+                        }
+                    }
+                    let elapsed = started.duration(to: .now)
+                    self.processingProgress = max(self.processingProgress, min(0.95, Double(elapsed.components.seconds) / 12))
+                    if let result, result.missingPoses.isEmpty { break }
+                    if let missing = result?.missingPoses.sorted(by: { $0.rawValue < $1.rawValue }).first {
+                        self.refinementHint = missing == .center ? "Look toward the camera while samples are refined" : missing.instruction
+                        // Only replenish rejected directions; keep the successful pools.
+                        for pose in result!.missingPoses {
+                            // Preserve frames acquired while this batch was processing.
+                            let newestProcessed = batch[pose]?.last?.capturedAt ?? .distantPast
+                            self.candidates[pose] = self.candidates[pose]?.filter { $0.capturedAt > newestProcessed }
+                            self.capturedPoses.remove(pose)
+                        }
+                    } else {
+                        self.refinementHint = "Checking sample quality…"
+                    }
+                    try await Task.sleep(for: .seconds(1))
+                } while started.duration(to: .now) < .seconds(12)
+                guard !Task.isCancelled, self.captureGeneration == generation, let result else { return }
+                guard result.missingPoses.isEmpty else {
+                    self.capturePhase = .turning
+                    self.captureHint = "A few angles were blurry — fill the unlit sections"
+                    return
+                }
+                self.collectedSamples = result.samples
+                self.candidates = [:]
+                self.camera.stop()
+                self.processingProgress = 1
+                await self.finishEnrollment(generation: generation)
+            } catch is CancellationError {
+                // Leaving the page owns the next state.
+            } catch {
+                guard self.captureGeneration == generation, !Task.isCancelled else { return }
+                self.capturePhase = .turning
+                self.enrollmentError = "Couldn't prepare your samples. Please try again."
+            }
+        }
+    }
 
+    private func updateProcessingProgress(_ progress: Double, generation: UUID) {
+        guard captureGeneration == generation, isOrganizingSamples else { return }
+        processingProgress = max(processingProgress, progress)
+    }
+
+    private func finishEnrollment(generation: UUID) async {
+        enrollmentComplete = true
+        guideVisible = false
         cameraPreviewVisible = false
-        try? await Task.sleep(for: .seconds(OnboardingMetrics.previewFadeOut))
-
-        try? await Task.sleep(for: .seconds(OnboardingMetrics.checkmarkDelay))
         showCheckmark = true
-
-        let elapsed = OnboardingMetrics.guideOverlayFadeOut + OnboardingMetrics.previewFadeOut + OnboardingMetrics.checkmarkDelay
-        let remaining = max(OnboardingMetrics.cameraCompleteToNameDelay - elapsed, 0)
-        try? await Task.sleep(for: .seconds(remaining))
-
-        camera.stop()
-
+        do { try await Task.sleep(for: .seconds(OnboardingMetrics.cameraCompleteToNameDelay)) } catch { return }
+        guard captureGeneration == generation, step == .enroll, !Task.isCancelled else { return }
+        enrollmentBackdrop = nil
         navDirection = .forward
         withAnimation(OnboardingMetrics.stepAnimation) { step = .name }
     }
@@ -949,13 +898,13 @@ final class OnboardingController {
         }
         // Skipped silently in the full setup flow, where the store is still locked and
         // `identities` is unreadable, not empty. `finish(password:)` re-checks once open.
-        guard !store.nameIsTaken(trimmed, excluding: enrollmentTarget.identityID) else {
+        guard !store.nameIsTaken(trimmed, excluding: committedEnrollmentID ?? enrollmentTarget.identityID) else {
             nameError = "A face named \"\(trimmed)\" is already enrolled."
             return
         }
         nameError = nil
 
-        guard isEnrollmentOnly else {
+        guard isEnrollmentOnly && !requiresNewPassword else {
             navDirection = .forward
             withAnimation(OnboardingMetrics.stepAnimation) { step = .password }
             return
@@ -983,12 +932,16 @@ final class OnboardingController {
         let samples = collectedSamples.map {
             FaceSample(embedding: $0.embedding, pose: $0.pose.name, capturedAt: $0.capturedAt, quality: $0.quality)
         }
-        try store.commitEnrollment(
-            replacing: enrollmentTarget.identityID,
+        guard !samples.isEmpty else {
+            throw NSError(domain: "Enrollment", code: 3, userInfo: [NSLocalizedDescriptionKey: "Capture your face before saving."])
+        }
+        let saved = try store.commitEnrollment(
+            replacing: committedEnrollmentID ?? enrollmentTarget.identityID,
             name: name,
             samples: samples,
             embedder: pipeline.embedder
         )
+        committedEnrollmentID = saved?.id
     }
 
     /// Only a pre-fill for the first-run flow's naming step — never the
@@ -1001,6 +954,7 @@ final class OnboardingController {
     // MARK: - Password
 
     func finish(password: String) async -> Bool {
+        guard !isSavingPassword, !isRecoveringStorage else { return false }
         let trimmed = password
         guard !trimmed.isEmpty else {
             passwordError = "Enter a password."
@@ -1020,7 +974,7 @@ final class OnboardingController {
             if !collectedSamples.isEmpty {
                 let name = pendingName.trimmingCharacters(in: .whitespacesAndNewlines)
                 // The naming step couldn't run this check while the store was locked.
-                guard !store.nameIsTaken(name, excluding: enrollmentTarget.identityID) else {
+                guard !store.nameIsTaken(name, excluding: committedEnrollmentID ?? enrollmentTarget.identityID) else {
                     nameError = "A face named \"\(name)\" is already enrolled."
                     navDirection = .backward
                     withAnimation(OnboardingMetrics.stepAnimation) { step = .name }
@@ -1042,6 +996,7 @@ final class OnboardingController {
             scheduleCompletionDismiss()
             return true
         } catch {
+            storageRecoveryRequired = (error as? SecureCredentialError) == .sessionKeyUnavailable
             passwordError = error.localizedDescription
             return false
         }

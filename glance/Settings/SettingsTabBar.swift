@@ -77,7 +77,7 @@ struct SettingsTabBar: View {
             HStack(spacing: 7) {
                 SettingsTabGlyph(icon: tab.icon)
                 if isSelected {
-                    Text(tab.title)
+                    Text(L10n.ui(tab.title))
                         .font(SettingsMetrics.tabTitleFont)
                         .lineLimit(1)
                         .fixedSize()

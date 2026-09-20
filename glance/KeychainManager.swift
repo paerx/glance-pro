@@ -38,79 +38,84 @@ enum KeychainManager {
 
     /// Attributes-only existence check — never prompts, even for access-controlled items.
     nonisolated static func exists(account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        return status != errSecItemNotFound
+        // UI callers remain conservative on access failures. Security decisions
+        // use contains(), which distinguishes "absent" from a query error.
+        (try? contains(account: account)) ?? true
     }
 
-    /// Pass an `LAContext` to authorize a read on an access-controlled item — the OS presents the prompt during this call.
-    nonisolated static func read(account: String, context: LAContext? = nil) throws -> Data {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        if let context {
-            query[kSecUseAuthenticationContext as String] = context
+    /// Use the same backend for insertion and lookup. Access-control items live
+    /// in the data-protection keychain; legacy builds also used the file keychain.
+    nonisolated private static func query(account: String, protected: Bool) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account,
+         kSecUseDataProtectionKeychain as String: protected]
+    }
+
+    nonisolated private static func backend(account: String) throws -> Bool? {
+        for protected in [true, false] {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            var request = query(account: account, protected: protected)
+            request[kSecMatchLimit as String] = kSecMatchLimitOne
+            request[kSecReturnAttributes as String] = true
+            request[kSecUseAuthenticationContext as String] = context
+            let status = SecItemCopyMatching(request as CFDictionary, nil)
+            switch status {
+            case errSecSuccess, errSecInteractionNotAllowed: return protected
+            case errSecItemNotFound: continue
+            default: throw KeychainError.osStatus(status)
+            }
         }
+        return nil
+    }
+
+    nonisolated static func contains(account: String) throws -> Bool {
+        try backend(account: account) != nil
+    }
+
+    nonisolated static func read(account: String, context: LAContext? = nil) throws -> Data {
+        guard let protected = try backend(account: account) else { throw KeychainError.itemNotFound }
+        var request = query(account: account, protected: protected)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        if let context { request[kSecUseAuthenticationContext as String] = context }
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = SecItemCopyMatching(request as CFDictionary, &item)
         switch status {
         case errSecSuccess:
             guard let data = item as? Data else { throw KeychainError.unexpectedData }
             return data
-        case errSecItemNotFound:
-            throw KeychainError.itemNotFound
-        case errSecUserCanceled, errSecAuthFailed:
-            throw KeychainError.authenticationFailed
-        default:
-            throw KeychainError.osStatus(status)
+        case errSecItemNotFound: throw KeychainError.itemNotFound
+        case errSecUserCanceled, errSecAuthFailed: throw KeychainError.authenticationFailed
+        default: throw KeychainError.osStatus(status)
         }
     }
 
-    /// Replaces any existing item. Pass `accessControl` to gate future reads behind Touch ID; `nil` for device-local, unlock-only.
     nonisolated static func save(account: String, data: Data, accessControl: SecAccessControl? = nil) throws {
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        var addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data
-        ]
-        if let accessControl {
-            addQuery[kSecAttrAccessControl as String] = accessControl
-        } else {
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        guard let protected = try backend(account: account) else {
+            try create(account: account, data: data, accessControl: accessControl)
+            return
         }
+        let status = SecItemUpdate(query(account: account, protected: protected) as CFDictionary,
+                                   [kSecValueData as String: data] as CFDictionary)
+        guard status == errSecSuccess else { throw KeychainError.osStatus(status) }
+    }
 
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
+    /// Insert-only; never replace a key after a cancelled authentication.
+    nonisolated static func create(account: String, data: Data, accessControl: SecAccessControl? = nil) throws {
+        var request = query(account: account, protected: true)
+        request[kSecValueData as String] = data
+        if let accessControl { request[kSecAttrAccessControl as String] = accessControl }
+        else { request[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly }
+        let status = SecItemAdd(request as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError.osStatus(status) }
     }
 
     nonisolated static func delete(account: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.osStatus(status)
-        }
+        guard let protected = try backend(account: account) else { return }
+        let status = SecItemDelete(query(account: account, protected: protected) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.osStatus(status) }
     }
 
     /// `.userPresence` requires Touch ID or device password, with no separate no-hardware handling needed.

@@ -17,10 +17,10 @@ struct IntroStepView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Glance")
+                Text(L10n.ui("Glance"))
                     .font(GlanceTheme.Font.title)
                     .foregroundStyle(GlanceTheme.textPrimary)
-                Text("Face Unlock for Mac")
+                Text(L10n.ui("Face Unlock for Mac"))
                     .font(GlanceTheme.Font.button)
                     .foregroundStyle(GlanceTheme.textSecondary)
 
@@ -59,7 +59,7 @@ struct PermissionsStepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Permissions")
+            Text(L10n.ui("Permissions"))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .padding(.leading, 4)
@@ -108,13 +108,13 @@ struct SecurityNoticeStepView: View {
                 .padding(.top, 25)
                 .padding(.leading, 4)
 
-            Text("Glance is not as secure as Apple's FaceID or TouchID.")
+            Text(L10n.ui("Glance is not as secure as Apple's FaceID or TouchID."))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 4)
 
-            Text("It uses your Mac's standard webcam and is designed for convenience, not high-security authentication.")
+            Text(L10n.ui("It uses your Mac's standard webcam and is designed for convenience, not high-security authentication."))
                 .font(GlanceTheme.Font.passwordCaption)
                 .foregroundStyle(GlanceTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -152,12 +152,12 @@ struct PreSetupStepView: View {
         VStack(spacing: 2) {
             HStack(alignment: .top, spacing: 2) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Set up Face\nRecognition")
+                    Text(L10n.ui("Set up Face\nRecognition"))
                         .font(GlanceTheme.Font.title)
                         .foregroundStyle(GlanceTheme.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Follow the directions\nshown on the screen")
+                    Text(L10n.ui("Slowly move your head\nin a circle"))
                         .font(GlanceTheme.Font.button)
                         .foregroundStyle(GlanceTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -198,13 +198,13 @@ struct SelectCameraStepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Select camera")
+            Text(L10n.ui("Select camera"))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .padding(.leading, 4)
                 .padding(.top, 14)
 
-            Text("Used for Face enrollment and for unlocking your Mac")
+            Text(L10n.ui("Used for Face enrollment and for unlocking your Mac"))
                 .font(GlanceTheme.Font.passwordCaption)
                 .foregroundStyle(GlanceTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -248,14 +248,55 @@ struct EnrollStepView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            cameraCluster
+            Group {
+                if controller.storageRecoveryRequired {
+                    VStack(spacing: 14) {
+                        Image(systemName: "lock.shield").font(.system(size: 38))
+                        Text(L10n.ui("Keep your previous data and start a new secure setup."))
+                            .multilineTextAlignment(.center)
+                        StorageRecoveryButton(controller: controller)
+                    }
+                    .padding(24)
+                    .frame(height: OnboardingMetrics.enrollCameraClusterDiameter)
+                } else if controller.isPreparingSession {
+                    ProgressView().frame(height: OnboardingMetrics.enrollCameraClusterDiameter)
+                } else {
+                    cameraCluster
+                }
+            }
                 .padding(.top, cameraTopPadding)
             Spacer(minLength: 8)
             instructionLabel
                 .padding(.horizontal, OnboardingMetrics.enrollInstructionHorizontalPadding)
                 .padding(.bottom, OnboardingMetrics.enrollInstructionBottomPadding)
+            if controller.enrollmentError != nil || controller.camera.errorMessage != nil {
+                Button(L10n.ui("Try again")) { controller.retryEnrollment() }
+                    .padding(.bottom, 16)
+            }
         }
+        .blur(radius: controller.isOrganizingSamples && !controller.enrollmentComplete ? 14 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if controller.isOrganizingSamples && !controller.enrollmentComplete {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Color.black.opacity(0.25)
+                    VStack(spacing: 12) {
+                        ShaderOrbView(configuration: GlanceSettings.shared.shaderOrbConfiguration, state: .thinking)
+                            .frame(width: 136, height: 136)
+                        Text(L10n.ui("Organizing samples"))
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(L10n.ui(controller.refinementHint ?? "Keep your face visible — refining samples locally"))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        ProgressView(value: controller.processingProgress)
+                            .frame(width: 180).tint(GlanceTheme.accent)
+                    }
+                    .foregroundStyle(.white)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: controller.isOrganizingSamples)
         .overlay(alignment: .topTrailing) {
             if showsCloseButton {
                 EnrollmentCloseButton {
@@ -287,7 +328,7 @@ struct EnrollStepView: View {
                     height: OnboardingMetrics.cameraCircleDiameter
                 )
                 .clipShape(Circle())
-                .opacity(controller.cameraPreviewVisible ? 1 : 0)
+                .opacity(controller.cameraPreviewVisible && !controller.isOrganizingSamples ? 1 : 0)
                 .animation(
                     .easeInOut(duration: OnboardingMetrics.previewFadeOut),
                     value: controller.cameraPreviewVisible
@@ -299,6 +340,13 @@ struct EnrollStepView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: controller.isTooFar)
+
+            if controller.isOrganizingSamples, !controller.enrollmentComplete, let image = controller.enrollmentBackdrop {
+                Image(decorative: image, scale: 1)
+                    .resizable().scaledToFill()
+                    .frame(width: OnboardingMetrics.cameraCircleDiameter, height: OnboardingMetrics.cameraCircleDiameter)
+                    .clipShape(Circle())
+            }
 
             if controller.showCheckmark {
                 AnimatedCheckmark(color: GlanceTheme.accent, lineWidth: 8)
@@ -314,7 +362,7 @@ struct EnrollStepView: View {
     }
 
     private var instructionLabel: some View {
-        Text(controller.enrollmentInstruction)
+        Text(L10n.ui(controller.enrollmentInstruction))
             .font(GlanceTheme.Font.instruction)
             .foregroundStyle(.white)
             .multilineTextAlignment(.center)
@@ -380,12 +428,12 @@ struct NameStepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Name this face")
+            Text(L10n.ui("Name this face"))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .padding(.leading, 4)
 
-            Text("Used to tell enrolled faces apart when more than one person is set up on this Mac.")
+            Text(L10n.ui("Used to tell enrolled faces apart when more than one person is set up on this Mac."))
                 .font(GlanceTheme.Font.passwordCaption)
                 .foregroundStyle(GlanceTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -398,7 +446,7 @@ struct NameStepView: View {
             }
 
             if let error = controller.nameError {
-                Text(error)
+                Text(L10n.ui(error))
                     .font(GlanceTheme.Font.rowDetail)
                     .foregroundStyle(GlanceTheme.statusDenied)
                     .fixedSize(horizontal: false, vertical: true)
@@ -428,12 +476,12 @@ struct PasswordStepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Enter your password")
+            Text(L10n.ui("Enter your password"))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
                 .padding(.leading, 4)
 
-            Text("Your password is required to unlock your Mac. It is encrypted and securely stored on your device. Glance works entirely offline, so your password never leaves your Mac.")
+            Text(L10n.ui("Your password is required to unlock your Mac. It is encrypted and securely stored on your device. Glance works entirely offline, so your password never leaves your Mac."))
                 .font(GlanceTheme.Font.passwordCaption)
                 .foregroundStyle(GlanceTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -447,20 +495,25 @@ struct PasswordStepView: View {
             }
 
             if let error = controller.passwordError {
-                Text(error)
+                Text(L10n.ui(error))
                     .font(GlanceTheme.Font.rowDetail)
                     .foregroundStyle(GlanceTheme.statusDenied)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if controller.storageRecoveryRequired {
+                StorageRecoveryButton(controller: controller)
             }
 
             // Spacer(minLength: 0)
 
             HStack(spacing: 10) {
-                PillButton(title: "Back", style: .secondary) {
+                PillButton(title: "Back", style: .secondary, isEnabled: !controller.isSavingPassword) {
                     controller.back()
                 }
                 PillButton(
                     title: controller.isSavingPassword ? "Saving…" : "Confirm",
-                    isEnabled: !password.isEmpty && !controller.isSavingPassword,
+                    isEnabled: !password.isEmpty && !controller.isSavingPassword && !controller.storageRecoveryRequired,
                     isDefault: true
                 ) {
                     Task { _ = await controller.finish(password: password) }
@@ -478,7 +531,7 @@ struct PasswordStepView: View {
 struct CompleteStepView: View {
     var body: some View {
         HStack(spacing: 12) {
-            Text("You're all set")
+            Text(L10n.ui("You're all set"))
                 .font(GlanceTheme.Font.title)
                 .foregroundStyle(GlanceTheme.textPrimary)
             Spacer(minLength: 4)

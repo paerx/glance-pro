@@ -169,18 +169,22 @@ struct NotchGeometry {
     static let notchShadowPadding: CGFloat = 24
     static let pillShadowPadding: CGFloat = 24
 
+    /// The fixed host window must contain the largest configurable orb plus
+    /// its content insets and (for a notch) the silhouette's outward flares.
+    private static let maximumOrbSide = CGFloat(ShaderOrbConfiguration.sizeRange.upperBound)
+
     static func windowSize(for style: NotchPanelStyle) -> CGSize {
         switch style {
         case .notch:
-            let contentWidth = max(notchOpenSize.width, OnboardingMetrics.maxPanelWidth)
-            let contentHeight = max(notchOpenSize.height, OnboardingMetrics.maxPanelHeight(for: .notch))
+            let contentWidth = max(maximumOrbSide + 32 + openTopRadius * 2, max(notchOpenSize.width, OnboardingMetrics.maxPanelWidth))
+            let contentHeight = max(maximumOrbSide + 48, max(notchOpenSize.height, OnboardingMetrics.maxPanelHeight(for: .notch)))
             return CGSize(
                 width: contentWidth + notchShadowPadding * 2 + hoverBump,
                 height: contentHeight + notchShadowPadding + hoverBump
             )
         case .pill:
-            let contentWidth = max(pillOpenSize.width, OnboardingMetrics.maxPanelWidth)
-            let contentHeight = max(pillOpenSize.height, OnboardingMetrics.maxPanelHeight(for: .pill))
+            let contentWidth = max(maximumOrbSide + 32, max(pillOpenSize.width, OnboardingMetrics.maxPanelWidth))
+            let contentHeight = max(maximumOrbSide + 48, max(pillOpenSize.height, OnboardingMetrics.maxPanelHeight(for: .pill)))
             return CGSize(
                 width: contentWidth + pillShadowPadding * 2 + hoverBump,
                 // `pillTopGap` since the detached pill's panel is pushed down by that much.

@@ -21,12 +21,12 @@ enum SecureFaceStoreError: LocalizedError {
 
 nonisolated enum SecureFaceStore {
     /// Distinct filename/extension so plaintext can never be mistaken for ciphertext.
-    private static let fileURL: URL = {
+    private static var fileURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = appSupport.appendingPathComponent("glance", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("face-identities.enc")
-    }()
+        return directory.appendingPathComponent(CredentialVault.faceFilename)
+    }
 
     /// True if a store exists on disk, regardless of whether the session is currently unlocked enough to read it.
     static var exists: Bool {
@@ -36,7 +36,8 @@ nonisolated enum SecureFaceStore {
     /// Throws `.sessionLocked` rather than returning an empty array, so callers can distinguish "nothing enrolled" from "enrolled, but locked".
     static func load() throws -> [FaceIdentity] {
         guard SecureCredentialManager.isSessionUnlocked else { throw SecureFaceStoreError.sessionLocked }
-        guard let ciphertext = try? Data(contentsOf: fileURL) else { return [] }
+        guard exists else { return [] }
+        let ciphertext = try Data(contentsOf: fileURL)
         let plaintext = try SecureCredentialManager.decrypt(ciphertext)
         return try JSONDecoder().decode([FaceIdentity].self, from: plaintext)
     }
@@ -48,7 +49,8 @@ nonisolated enum SecureFaceStore {
         try ciphertext.write(to: fileURL, options: .atomic)
     }
 
-    static func deleteAll() {
-        try? FileManager.default.removeItem(at: fileURL)
+    static func deleteAll() throws {
+        guard exists else { return }
+        try FileManager.default.removeItem(at: fileURL)
     }
 }
