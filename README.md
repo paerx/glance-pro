@@ -16,7 +16,7 @@
 
 Glance brings the FaceID-like experience of your iPhone to a Mac near you. Unlock your Mac with a glance — no typing, no reaching for the TouchID key. Everything runs on-device using Apple's Vision
 and Core ML frameworks, so your face data and your Mac password never touch the internet. The UI is built into your Macbook's notch with fluid dynamic island like animations.
-
+https://github.com/paerx/glance-pro/issues/1#issuecomment-5749698694
 
 ## 原作者与项目来源
 
@@ -48,7 +48,7 @@ and Core ML frameworks, so your face data and your Mac password never touch the 
 代码已通过编译和逻辑回归检查；Touch ID、摄像头采集及熄屏解锁的完整流程仍需使用正常签名的版本进行实机验证。
 
 
-https://github.com/user-attachments/assets/77438826-80a9-4ab2-9fc3-42407a2d0adb
+
 
 
 ---
