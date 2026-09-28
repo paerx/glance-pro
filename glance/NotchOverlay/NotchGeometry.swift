@@ -193,6 +193,11 @@ struct NotchGeometry {
         }
     }
 
+    static var hostWindowSize: CGSize {
+        let notch = windowSize(for: .notch), pill = windowSize(for: .pill)
+        return CGSize(width: max(notch.width, pill.width), height: max(notch.height, pill.height))
+    }
+
     /// Floor for a physical notch's measured width — the auxiliary-area arithmetic
     /// below can come up implausibly small on odd display configurations.
     private static let minimumNotchWidth: CGFloat = 200
@@ -227,7 +232,7 @@ struct NotchGeometry {
         if let targetID = GlanceSettings.shared.preferredDisplayID {
             return NSScreen.screens.first { $0.stableDisplayID == targetID }
         }
-        return NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+        return NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.screens.first
     }
 }
 

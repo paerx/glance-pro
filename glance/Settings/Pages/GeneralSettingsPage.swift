@@ -97,8 +97,14 @@ struct GeneralSettingsPage: View {
                     GlanceToggle(isOn: $settings.retryOnHover)
                 }
                 SettingsGroupDivider()
-                SettingsRowContent(title: "Auto retry once after failure") {
+                SettingsRowContent(title: "Auto retry after failure") {
                     GlanceToggle(isOn: $settings.autoRetryOnce)
+                }
+                SettingsGroupDivider()
+                SettingsRowContent(title: "Retry count · 2 second interval") {
+                    Stepper(value: $settings.automaticRetryCount, in: 1...10) {
+                        Text("\(settings.automaticRetryCount)")
+                    }.disabled(!settings.autoRetryOnce)
                 }
                 SettingsGroupDivider()
                 SettingsRowContent(title: "Haptic feedback") {

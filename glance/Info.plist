@@ -10,5 +10,9 @@
 	<string>https://tryglance.app/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>o9uQmlzKzh7NZvFtVktVh/wqw4Ie6WshX8K8NFDweWY=</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold your VTA shortcut to record speech for a new ChatGPT chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>VTA converts your speech to text on this Mac before sending the transcript to ChatGPT.</string>
 </dict>
 </plist>

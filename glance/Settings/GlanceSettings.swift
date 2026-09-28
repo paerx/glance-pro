@@ -89,6 +89,10 @@ enum UnlockTrigger: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class GlanceSettings {
+    var automaticRetryCount: Int = UserDefaults.standard.object(forKey: "Glance.retryCount") as? Int ?? RecognitionRetryPolicy.defaultCount {
+        didSet { UserDefaults.standard.set(automaticRetryCount, forKey: "Glance.retryCount") }
+    }
+
     var language: AppLanguage = .initial {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: "Glance.language") }
     }
@@ -316,7 +320,7 @@ final class GlanceSettings {
         faceDetectionSeconds = (defaults.object(forKey: Key.faceDetectionSeconds) as? Int)
             .map { min(max($0, Self.faceDetectionRange.lowerBound), Self.faceDetectionRange.upperBound) }
             ?? 5
-        autoRetryOnce = defaults.object(forKey: Key.autoRetryOnce) as? Bool ?? false
+        autoRetryOnce = defaults.object(forKey: Key.autoRetryOnce) as? Bool ?? true
         hapticFeedbackEnabled = defaults.object(forKey: Key.hapticFeedbackEnabled) as? Bool ?? true
         preferredDisplayID = defaults.string(forKey: Key.preferredDisplayID)
         preferredDisplayName = defaults.string(forKey: Key.preferredDisplayName)

@@ -11,6 +11,7 @@ import Observation
 @Observable
 @MainActor
 final class AppEnvironment {
+    let vtaController = VTAController()
     let pocController = POCController()
     let faceLabController = FaceLabController()
     let faceUnlockCoordinator: FaceUnlockCoordinator

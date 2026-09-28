@@ -42,8 +42,8 @@ final class FaceUnlockCoordinator {
     private(set) var lastOutcome: String?
 
     private var hasArmedForCurrentLock = false
-    /// One-shot per lock session — an auto-retry that could itself auto-retry would loop the camera for the whole lock session.
-    private var hasAutoRetriedForCurrentLock = false
+    /// Bounded retries in the same expanded panel; manual activation starts a new budget.
+    private var automaticRetries = 0
     private var scanTask: Task<Void, Never>?
     private var triggerTask: Task<Void, Never>?
     private var armTask: Task<Void, Never>?
@@ -57,7 +57,6 @@ final class FaceUnlockCoordinator {
     /// Held separately from `scanTask` since it's scheduled from inside the scan task it follows — reusing `scanTask` would self-cancel it.
     private var autoRetryTask: Task<Void, Never>?
     /// Gap between headless auto-retries, just to keep the camera from restarting in a tight loop.
-    private let headlessRetryDelay: Duration = .seconds(1)
 
     /// When off, no notch/pill presence at all — every overlay call in this file is conditioned on this rather than just skipping the video.
     private var showsUI: Bool { GlanceSettings.shared.showUnlockAnimation }
@@ -94,7 +93,7 @@ final class FaceUnlockCoordinator {
         let event = lockMonitor.lastEvent
         if !triggerPolicy.receive(event) {
             hasArmedForCurrentLock = false
-            hasAutoRetriedForCurrentLock = false
+            automaticRetries = 0
             disarmOverlay()
             return
         }
@@ -115,7 +114,7 @@ final class FaceUnlockCoordinator {
     private func evaluateTrigger(event: LockEventKind?) {
         guard LockMonitor.isScreenActuallyLocked() else {
             hasArmedForCurrentLock = false
-            hasAutoRetriedForCurrentLock = false
+            automaticRetries = 0
             disarmOverlay()
             return
         }
@@ -125,7 +124,7 @@ final class FaceUnlockCoordinator {
         // `isWithinRecentArmBurst` keeps the several wake signals from one lid-open from each re-arming and fighting over the camera.
         if event == .wake, !isWithinRecentArmBurst {
             hasArmedForCurrentLock = false
-            hasAutoRetriedForCurrentLock = false
+            automaticRetries = 0
         }
 
         // Runs before the hasArmedForCurrentLock guard — the space monitor's lifetime is tied to "locked + opted in," not to whether a scan already ran.
@@ -249,7 +248,10 @@ final class FaceUnlockCoordinator {
     }
 
     /// Called on arm, and again whenever the overlay hover-activates.
-    private func startScanCycle() {
+    private func startScanCycle(isAutomaticRetry: Bool = false) {
+        autoRetryTask?.cancel()
+        autoRetryTask = nil
+        if !isAutomaticRetry { automaticRetries = 0 }
         scanTask?.cancel()
         scanGeneration &+= 1
         let generation = scanGeneration
@@ -288,7 +290,7 @@ final class FaceUnlockCoordinator {
         guard generation == scanGeneration, !Task.isCancelled else { return }
         let showsUI = self.showsUI
         if showsUI {
-            NotchOverlayController.shared.beginScanning()
+            NotchOverlayController.shared.beginScanning(managesTimeout: false)
         }
         statusMessage = "Looking for your face…"
 
@@ -300,58 +302,36 @@ final class FaceUnlockCoordinator {
         // A newer cycle now owns the camera and overlay — leave both alone, and leave the auto-retry one-shot unspent.
         guard generation == scanGeneration else { return }
 
-        camera.stop()
-
-        switch outcome {
-        case .matched:
-            // The unlock already happened inside observeScanWindow — this only decides whether anything is shown about it.
-            if showsUI {
-                NotchOverlayController.shared.finish(success: true)
-            }
-        case .consistentlyWrongFace:
-            statusMessage = "Face not recognized."
-            if showsUI {
-                NotchOverlayController.shared.finish(success: false)
-                statusMessage = "Face not recognized — hover the notch to try again."
-                scheduleAutoRetryIfEnabled(after: NotchOverlayController.shared.failureHoldDuration)
-            } else {
-                scheduleAutoRetryIfEnabled(after: headlessRetryDelay)
-            }
-        case .spoofSuspected:
-            statusMessage = "Couldn't confirm a live face."
-            if showsUI {
-                NotchOverlayController.shared.finish(success: false)
-                statusMessage = "Couldn't confirm a live face — hover the notch to try again."
-                scheduleAutoRetryIfEnabled(after: NotchOverlayController.shared.failureHoldDuration)
-            } else {
-                scheduleAutoRetryIfEnabled(after: headlessRetryDelay)
-            }
-        case .noResolution:
-            statusMessage = "No face detected."
-            if showsUI {
-                // No explicit collapse call: NotchOverlayController's own scanning timeout fires on the same mark and collapses itself.
-                statusMessage = "No face detected — hover the notch to try again."
-                scheduleAutoRetryIfEnabled(after: NotchOverlayController.shared.collapseAnimationDuration)
-            } else {
-                scheduleAutoRetryIfEnabled(after: headlessRetryDelay)
-            }
+        guard !Task.isCancelled else { return }
+        guard isEnabled, !lockMonitor.isSleeping, SecureCredentialManager.isSessionUnlocked else {
+            disarmOverlay(); return
         }
-    }
-
-    /// `delay` waits out whatever the overlay is still showing so the retry doesn't start underneath the previous outcome.
-    private func scheduleAutoRetryIfEnabled(after delay: Duration) {
-        guard GlanceSettings.shared.autoRetryOnce, !hasAutoRetriedForCurrentLock else { return }
-        hasAutoRetriedForCurrentLock = true
-        autoRetryTask?.cancel()
+        if case .matched = outcome {
+            camera.stop()
+            if showsUI { NotchOverlayController.shared.finish(success: true) }
+            return
+        }
+        guard LockMonitor.isScreenActuallyLocked() else { disarmOverlay(); return }
+        switch outcome {
+        case .consistentlyWrongFace: statusMessage = "Face not recognized."
+        case .spoofSuspected: statusMessage = "Couldn't confirm a live face."
+        case .noResolution: statusMessage = "No face detected."
+        case .matched: break
+        }
+        let retry = RecognitionRetryPolicy.shouldRetry(completedRetries: automaticRetries, enabled: GlanceSettings.shared.autoRetryOnce, limit: GlanceSettings.shared.automaticRetryCount)
+        if showsUI { NotchOverlayController.shared.finish(success: false, keepExpanded: retry) }
+        guard retry else { camera.stop(); return }
+        automaticRetries += 1
         autoRetryTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self else { return }
-            // Re-check rather than trust the delay: the user may have unlocked by password or retried manually while this waited.
-            guard LockMonitor.isScreenActuallyLocked(), self.isEnabled else { return }
-            if self.showsUI {
-                guard NotchOverlayController.shared.phase == .closed else { return }
+            do { try await Task.sleep(for: RecognitionRetryPolicy.delay) } catch { return }
+            guard let self, generation == self.scanGeneration,
+                  self.isEnabled, !self.lockMonitor.isSleeping,
+                  SecureCredentialManager.isSessionUnlocked,
+                  LockMonitor.isScreenActuallyLocked(), GlanceSettings.shared.autoRetryOnce else {
+                guard let self, generation == self.scanGeneration else { return }
+                self.disarmOverlay(); return
             }
-            self.startScanCycle()
+            self.startScanCycle(isAutomaticRetry: true)
         }
     }
 

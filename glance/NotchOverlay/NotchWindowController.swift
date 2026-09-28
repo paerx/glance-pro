@@ -13,6 +13,8 @@ import AppKit
 final class NotchWindowController {
     private var window: NotchWindow?
     private var isSkyLightDelegated = false
+    private var positionTask: Task<Void, Never>?
+    private var lastReportedGeometry: NotchGeometry?
 
     /// What the overlay controller asked for via `setInteractive(_:)`.
     private var wantsInteractive = false
@@ -59,6 +61,10 @@ final class NotchWindowController {
             skyLight.delegate(window)
             isSkyLightDelegated = true
         }
+        // Delegation may move the panel after orderFront. Anchor afterwards,
+        // and keep enforcing the invariant for the whole visible lifetime.
+        reposition(window)
+        settlePosition()
         updateCursorPolling()
     }
 
@@ -71,6 +77,7 @@ final class NotchWindowController {
     }
 
     func hide() {
+        positionTask?.cancel()
         guard let window else { return }
         if isSkyLightDelegated, let skyLight = NotchSkyLight.shared {
             skyLight.undelegate(window)
@@ -89,6 +96,8 @@ final class NotchWindowController {
         guard interactive, key, let window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        reposition(window)
+        settlePosition()
     }
 
     var isVisible: Bool { window?.isVisible ?? false }
@@ -153,9 +162,9 @@ final class NotchWindowController {
 
     private func windowIfNeeded() -> NotchWindow {
         if let window { return window }
-        // Never resized afterward (see NotchWindow.swift), so a style change
-        // mid-session keeps whatever margin it was created with.
-        let size = NotchGeometry.windowSize(for: currentGeometry.style)
+        // Both styles share the same host footprint; content transitions never
+        // resize the NSPanel. Placement correction restores this size if needed.
+        let size = NotchGeometry.hostWindowSize
         let rect = NSRect(x: 0, y: 0, width: size.width, height: size.height)
         let newWindow = NotchWindow(contentRect: rect)
         newWindow.contentView = contentView
@@ -165,17 +174,36 @@ final class NotchWindowController {
 
     private func reposition(_ window: NotchWindow) {
         guard let screen = NotchGeometry.preferredScreen() else { return }
-        let screenFrame = screen.frame
-        let size = window.frame.size
-        window.setFrameOrigin(NSPoint(
-            x: screenFrame.midX - size.width / 2,
-            y: screenFrame.maxY - size.height
-        ))
+        let expected = CGRect(origin: OverlayPlacement.origin(screen: screen.frame, window: NotchGeometry.hostWindowSize),
+                              size: NotchGeometry.hostWindowSize)
+        // Correct size too: a late hosting-view layout can resize a borderless
+        // panel and shift the content's top edge without changing its origin.
+        if OverlayPlacement.needsCorrection(actual: window.frame, expected: expected) {
+            window.setFrame(expected, display: true, animate: false)
+        }
+    }
+
+    private func settlePosition() {
+        positionTask?.cancel()
+        positionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                guard let self, let window = self.window, window.isVisible else { return }
+                self.reposition(window)
+                let geometry = self.currentGeometry
+                if self.lastReportedGeometry?.closedSize != geometry.closedSize
+                    || self.lastReportedGeometry?.isPhysicalNotch != geometry.isPhysicalNotch {
+                    self.lastReportedGeometry = geometry
+                    self.onScreenParametersChanged?()
+                }
+            }
+        }
     }
 
     @objc private func screenParametersChanged() {
         onScreenParametersChanged?()
         guard let window, window.isVisible else { return }
         reposition(window)
+        settlePosition()
     }
 }

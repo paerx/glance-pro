@@ -83,6 +83,16 @@ https://github.com/user-attachments/assets/e2ba036a-db3d-4824-a3d8-336b239baca9
 Open the `.dmg` file and drag Glance to `/Applications`, then open it.
 
 
+## 本分支的新功能：VTA 与连续重试
+
+- **应用图标：** 使用完整 macOS AppIcon 资源集，构建产物包含 `AppIcon.icns`，兼容 macOS 15 及以后版本。
+- **顶部弹窗：** 固定窗口尺寸并绕过菜单栏自动避让，显示或切换屏幕后重新校准顶部位置。
+- **失败重试：** 默认在首次失败后每隔 **2 秒**重试，最多追加 **3 次**（共 4 次尝试）。等待和重试期间保持面板展开、摄像头运行，不重新播放入场动画。可在通用设置中关闭自动重试或调整次数；每次尝试重新验证身份和活体，解锁或休眠后停止。
+- **VTA（Voice to ChatGPT）：** 在 **设置 → 通用 → VTA** 开启并授权麦克风、语音识别和辅助功能。默认按住 **F6** 录音，可绑定其他按键或组合键；松开后使用 macOS 本机语音识别转写，再尝试在 **Mac 版 ChatGPT** 新建聊天并发送。支持中文和英文，单次最长 60 秒。
+- **VTA 动效：** 顶部弹出录音与音量动效；转写和发送时显示 Thinking，成功对应 Speaking，错误对应 Idle。关闭浮层、禁用 VTA 或锁屏会取消任务。
+
+VTA 使用已安装并登录的 ChatGPT 应用，不需要 OpenAI API Key。录音不落盘，本机不支持所选语言的离线识别时会提示错误；只有转写文本会在发送时交给 ChatGPT。桌面发送依赖 ChatGPT 的辅助功能控件；找不到新聊天、输入或发送控件时会停止并保留文本，可在 VTA 设置中复制或手动重试。应用更新可能改变这些控件，需要实机验证兼容性。
+
 ## Permissions
 
 | Permission | Why |
@@ -90,6 +100,8 @@ Open the `.dmg` file and drag Glance to `/Applications`, then open it.
 | **Camera** | To see your face. Frames are processed in memory and never written to disk. |
 | **Accessibility** | To type your password into the lock screen. |
 | **Touch ID** | Gates the key that encrypts your face data and password. |
+| **Microphone & Speech Recognition (optional VTA)** | Record while the shortcut is held and transcribe locally. |
+| **Accessibility (VTA)** | Detect the held shortcut and operate New chat / Send in the ChatGPT Mac app. |
 
 ## How it works
 

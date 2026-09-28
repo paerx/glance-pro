@@ -146,6 +146,7 @@ struct SettingsWindowView: View {
             switch selection {
             case .general:
                 GeneralSettingsPage(coordinator: environment.faceUnlockCoordinator)
+                VTASettingsView(controller: environment.vtaController)
             case .yourFace:
                 YourFaceSettingsPage(environment: environment)
             case .password:

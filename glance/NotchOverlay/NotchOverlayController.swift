@@ -97,7 +97,10 @@ final class NotchOverlayController {
     let collapseAnimationDuration: Duration = .milliseconds(700)
 
     private init() {
-        windowController.contentView = NSHostingView(rootView: NotchOverlayView(controller: self))
+        let host = NSHostingView(rootView: NotchOverlayView(controller: self))
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        windowController.contentView = host
         // A display connecting/disconnecting mid-flow can flip notch vs. pill style.
         windowController.onScreenParametersChanged = { [weak self] in
             guard let self else { return }
@@ -175,7 +178,7 @@ final class NotchOverlayController {
 
     /// Shows the idle still; auto-collapses silently (no failure animation) after
     /// `scanTimeoutDuration` if nothing resolves it.
-    func beginScanning() {
+    func beginScanning(managesTimeout: Bool = true) {
         resolveTask?.cancel(); resolveTask = nil
         scanTimeoutTask?.cancel()
         geometry = windowController.currentGeometry
@@ -184,6 +187,7 @@ final class NotchOverlayController {
         phase = .scanning
         updateInteractivity()
 
+        guard managesTimeout else { return }
         scanTimeoutTask = Task { [weak self] in
             try? await Task.sleep(for: self?.scanTimeoutDuration ?? .seconds(5))
             guard let self, !Task.isCancelled, self.phase == .scanning else { return }
@@ -274,7 +278,7 @@ final class NotchOverlayController {
     /// Resolves the current attempt. Success plays its animation and then
     /// collapses on its own; failure plays its animation and holds until
     /// either the hold expires or the user hovers to retry.
-    func finish(success: Bool) {
+    func finish(success: Bool, keepExpanded: Bool = false) {
         resolveTask?.cancel()
         scanTimeoutTask?.cancel()
 
@@ -285,6 +289,7 @@ final class NotchOverlayController {
         phase = success ? .success : .failure
         updateInteractivity()
 
+        guard !keepExpanded else { return }
         let hold = shouldAnimate ? (success ? successHoldDuration : failureHoldDuration) : Duration.milliseconds(400)
         resolveTask = Task { [weak self] in
             guard let self else { return }

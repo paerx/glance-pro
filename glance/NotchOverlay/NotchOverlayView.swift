@@ -338,13 +338,14 @@ struct NotchOverlayView: View {
         }
         .onChange(of: controller.isPillDocked) { _, _ in scheduleChoreography() }
         .frame(
-            width: NotchGeometry.windowSize(for: style).width,
-            height: NotchGeometry.windowSize(for: style).height,
+            width: NotchGeometry.hostWindowSize.width,
+            height: NotchGeometry.hostWindowSize.height,
             alignment: .top
         )
         // Anchored on this outermost, full-window-sized frame so the panel's
         // reported frame above is directly comparable to the hosting view's
         // own bounds — see `NotchWindowController.updateMousePassthrough()`.
+        .ignoresSafeArea()
         .coordinateSpace(name: Self.interactiveCoordinateSpace)
         .onPreferenceChange(InteractivePanelFramePreferenceKey.self) { rect in
             controller.updateInteractiveContentRect(rect)
